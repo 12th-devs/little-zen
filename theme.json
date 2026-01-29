@@ -6,7 +6,7 @@
     "chrome": "chrome.css"
   },
   "scripts": {
-    "zen-auto-wallpaper.uc.js": {
+    "littleZen.uc.js": {
       "include": ["chrome://browser/content/browser.xhtml"]
     }
   },
