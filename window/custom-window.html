@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Little Zen Window</title>
+    <link rel="stylesheet" href="custom-window.css">
+</head>
+<body>
+    <div id="window-container">
+        <div id="window-header">
+            <div id="window-controls">
+                <button id="minimize-btn" class="control-btn">−</button>
+                <button id="maximize-btn" class="control-btn">□</button>
+                <button id="close-btn" class="control-btn">×</button>
+            </div>
+            <div id="window-title">Little Zen</div>
+        </div>
+        
+        <div id="navigation-bar">
+            <div id="nav-controls">
+                <button id="back-btn" class="nav-btn" disabled>←</button>
+                <button id="forward-btn" class="nav-btn" disabled>→</button>
+                <button id="refresh-btn" class="nav-btn">↻</button>
+            </div>
+            <div id="address-bar">
+                <input type="text" id="url-input" placeholder="Enter URL or search...">
+            </div>
+            <div id="nav-actions">
+                <button id="home-btn" class="nav-btn">🏠</button>
+                <button id="menu-btn" class="nav-btn">☰</button>
+            </div>
+        </div>
+        
+        <div id="content-area">
+            <iframe id="web-content" src="about:blank" frameborder="0"></iframe>
+        </div>
+        
+        <div id="status-bar">
+            <span id="status-text">Ready</span>
+            <div id="progress-bar" style="display: none;">
+                <div id="progress-fill"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="custom-window.js"></script>
+</body>
+</html>
