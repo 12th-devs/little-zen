@@ -5,6 +5,7 @@
 <window id="littleZenWindow"
         title="Little Zen Window"
         xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+        windowtype="navigator:browser"
         width="1200"
         height="800"
         persist="width height screenX screenY"
@@ -12,6 +13,18 @@
 
   <script type="application/javascript" src="chrome://global/content/globalOverlay.js"/>
   <script type="application/javascript" src="custom-window.js"/>
+
+  <!-- Extension Compatibility: Popup elements for context menus -->
+  <popupset id="mainPopupSet">
+    <menupopup id="contentAreaContextMenu">
+      <menuitem id="context-inspect" label="Inspect" hidden="true"/>
+    </menupopup>
+  </popupset>
+
+  <!-- Workspace Menu Popup -->
+  <menupopup id="workspace-menu-popup" position="after_start">
+    <!-- Dynamically populated -->
+  </menupopup>
 
   <vbox flex="1">
     <!-- Window Controls -->
@@ -37,13 +50,18 @@
       </hbox>
       
       <hbox id="workspace-control-container">
-        <label id="workspace-indicator"/>
-        <label id="workspace-chevron"/>
+        <label id="workspace-indicator" value="Space" class="workspace-indicator"/>
+        <label id="workspace-chevron" value="▼" class="workspace-chevron" popup="workspace-menu-popup"/>
       </hbox>
     </toolbar>
 
     <!-- Content Area -->
     <vbox id="content-area" flex="1">
+      <!-- Tab Container Shim for gBrowser API - Must be <tabs> element -->
+      <tabs id="tabbrowser-tabs" class="tabbrowser-tabs" hidden="true">
+        <!-- Mock tab container for Zen Window Sync compatibility -->
+      </tabs>
+      
       <browser id="web-content" 
                flex="1" 
                type="content" 
@@ -52,7 +70,10 @@
                maychangeremoteness="true"
                disablehistory="false"
                disablesecurity="false"
-               autocompletepopup="PopupAutoComplete"/>
+               autocompletepopup="PopupAutoComplete"
+               messagemanagergroup="browsers"
+               tooltip="aHTMLTooltip"
+               contextmenu="contentAreaContextMenu"/>
     </vbox>
 
     <!-- Status Bar -->

@@ -160,6 +160,9 @@
                     this.customWindows.add(customWindow);
                     console.log("[LittleZen] Custom window created successfully");
                     
+                    // Set the sync flag immediately after window creation
+                    customWindow._zenStartupSyncFlag = "synced";
+                    
                     // Ensure the custom window gets focus instead of the main browser
                     customWindow.addEventListener('load', () => {
                         try {

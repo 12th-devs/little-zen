@@ -1,265 +1,143 @@
 /* Little Zen Custom Window Styles */
-* {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
+
+/* Workspace Controls */
+#workspace-control-container {
+  align-items: center;
+  margin-inline-start: 8px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background-color: rgba(255, 255, 255, 0.1);
 }
 
-body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: #1a1a1a;
-    color: #ffffff;
-    overflow: hidden;
-    height: 100vh;
+.workspace-indicator {
+  font-weight: 500;
+  color: #ffffff;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 3px;
+  transition: background-color 0.2s ease;
 }
 
-#window-container {
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-    background: linear-gradient(135deg, #1e1e1e 0%, #2a2a2a 100%);
-    border: 1px solid #333;
-    border-radius: 8px;
-    overflow: hidden;
+.workspace-indicator:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.workspace-chevron {
+  color: #cccccc;
+  cursor: pointer;
+  padding: 2px 4px;
+  margin-inline-start: 4px;
+  border-radius: 3px;
+  font-size: 10px;
+  transition: background-color 0.2s ease;
+}
+
+.workspace-chevron:hover {
+  background-color: rgba(255, 255, 255, 0.1);
 }
 
 /* Window Header */
-#window-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    height: 32px;
-    background: #2d2d2d;
-    border-bottom: 1px solid #404040;
-    padding: 0 8px;
-    -webkit-app-region: drag;
-}
-
-#window-title {
-    font-size: 13px;
-    font-weight: 500;
-    color: #cccccc;
-    text-align: center;
-    flex: 1;
-    pointer-events: none;
-}
-
-#window-controls {
-    display: flex;
-    gap: 4px;
-    -webkit-app-region: no-drag;
+.window-header {
+  background-color: #1a1a1a;
+  border-bottom: 1px solid #333;
+  padding: 4px 8px;
 }
 
 .control-btn {
-    width: 20px;
-    height: 20px;
-    border: none;
-    border-radius: 50%;
-    font-size: 12px;
-    font-weight: bold;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.2s ease;
-}
-
-#minimize-btn {
-    background: #ffbd2e;
-    color: #000;
-}
-
-#maximize-btn {
-    background: #28ca42;
-    color: #000;
-}
-
-#close-btn {
-    background: #ff5f57;
-    color: #000;
+  min-width: 24px;
+  min-height: 24px;
+  margin: 2px;
+  border-radius: 3px;
+  background-color: transparent;
+  color: #cccccc;
+  border: none;
 }
 
 .control-btn:hover {
-    opacity: 0.8;
-    transform: scale(1.1);
+  background-color: rgba(255, 255, 255, 0.1);
 }
 
 /* Navigation Bar */
-#navigation-bar {
-    display: flex;
-    align-items: center;
-    height: 40px;
-    background: #333333;
-    border-bottom: 1px solid #404040;
-    padding: 0 8px;
-    gap: 8px;
-}
-
-#nav-controls {
-    display: flex;
-    gap: 4px;
+.nav-toolbar {
+  background-color: #2d2d2d;
+  border-bottom: 1px solid #404040;
+  padding: 4px 8px;
 }
 
 .nav-btn {
-    width: 28px;
-    height: 28px;
-    border: none;
-    border-radius: 4px;
-    background: #404040;
-    color: #cccccc;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 14px;
-    transition: all 0.2s ease;
+  min-width: 32px;
+  min-height: 28px;
+  margin: 2px;
+  border-radius: 4px;
+  background-color: transparent;
+  color: #cccccc;
+  border: 1px solid #404040;
 }
 
-.nav-btn:hover:not(:disabled) {
-    background: #505050;
+.nav-btn:hover:not([disabled]) {
+  background-color: #404040;
 }
 
-.nav-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
+.nav-btn[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 #address-bar {
-    flex: 1;
-    margin: 0 8px;
+  margin: 0 8px;
 }
 
 #url-input {
-    width: 100%;
-    height: 28px;
-    border: 1px solid #555;
-    border-radius: 14px;
-    background: #2a2a2a;
-    color: #ffffff;
-    padding: 0 12px;
-    font-size: 13px;
-    outline: none;
-    transition: all 0.2s ease;
+  background-color: #1a1a1a;
+  color: #ffffff;
+  border: 1px solid #404040;
+  border-radius: 4px;
+  padding: 6px 12px;
+  font-size: 13px;
 }
 
 #url-input:focus {
-    border-color: #0078d4;
-    background: #333333;
-}
-
-#nav-actions {
-    display: flex;
-    gap: 4px;
+  border-color: #0078d4;
+  outline: none;
 }
 
 /* Content Area */
 #content-area {
-    flex: 1;
-    position: relative;
-    background: #ffffff;
-}
-
-#web-content {
-    width: 100%;
-    height: 100%;
-    border: none;
-    background: #ffffff;
+  background-color: #1a1a1a;
 }
 
 /* Status Bar */
 #status-bar {
-    height: 24px;
-    background: #2d2d2d;
-    border-top: 1px solid #404040;
-    display: flex;
-    align-items: center;
-    padding: 0 8px;
-    font-size: 11px;
-    color: #999999;
-    position: relative;
+  background-color: #2d2d2d;
+  border-top: 1px solid #404040;
+  padding: 4px 8px;
 }
 
 #status-text {
-    flex: 1;
+  color: #cccccc;
+  font-size: 12px;
 }
 
 #progress-bar {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 2px;
-    background: #404040;
+  margin-inline-start: 8px;
+  width: 100px;
 }
 
-#progress-fill {
-    height: 100%;
-    background: linear-gradient(90deg, #0078d4, #00bcf2);
-    width: 0%;
-    transition: width 0.3s ease;
+/* General Window Styling */
+window {
+  background-color: #1a1a1a;
+  color: #ffffff;
 }
 
-/* Animations */
-@keyframes fadeIn {
-    from { opacity: 0; transform: scale(0.95); }
-    to { opacity: 1; transform: scale(1); }
+/* Zen Window Sync Compatibility */
+.tabbrowser-tabs {
+  display: none !important;
+  visibility: hidden !important;
 }
 
-#window-container {
-    animation: fadeIn 0.3s ease-out;
-}
-
-/* Scrollbar Styling */
-::-webkit-scrollbar {
-    width: 8px;
-}
-
-::-webkit-scrollbar-track {
-    background: #2a2a2a;
-}
-
-::-webkit-scrollbar-thumb {
-    background: #555555;
-    border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-    background: #666666;
-}
-
-/* Loading State */
-.loading #web-content {
-    opacity: 0.7;
-}
-
-.loading #progress-bar {
-    display: block !important;
-}
-
-/* Error State */
-.error #content-area {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: #1a1a1a;
-    color: #cccccc;
-}
-
-.error #web-content {
-    display: none;
-}
-
-/* Responsive Design */
-@media (max-width: 600px) {
-    #window-title {
-        display: none;
-    }
-    
-    #nav-controls .nav-btn:not(#refresh-btn) {
-        display: none;
-    }
-    
-    #nav-actions .nav-btn:not(#menu-btn) {
-        display: none;
-    }
+#tabbrowser-tabs {
+  height: 0 !important;
+  overflow: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
 }
