@@ -13,7 +13,7 @@
         const customWindow = window.open(
             windowUrl,
             'littleZenWindow',
-            'width=1200,height=800,resizable=yes,scrollbars=yes,status=yes,location=yes,menubar=no,toolbar=no'
+            'width=1200,height=800,resizable=yes,scrollbars=yes,status=yes,location=yes,menubar=no,toolbar=no, titlebar=false'
         );
         
         if (customWindow) {

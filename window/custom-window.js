@@ -13,20 +13,18 @@ class LittleZenWindow {
     
     initializeElements() {
         this.elements = {
-            container: document.getElementById('window-container'),
             webContent: document.getElementById('web-content'),
             urlInput: document.getElementById('url-input'),
             backBtn: document.getElementById('back-btn'),
             forwardBtn: document.getElementById('forward-btn'),
             refreshBtn: document.getElementById('refresh-btn'),
-            homeBtn: document.getElementById('home-btn'),
-            menuBtn: document.getElementById('menu-btn'),
             statusText: document.getElementById('status-text'),
             progressBar: document.getElementById('progress-bar'),
-            progressFill: document.getElementById('progress-fill'),
             minimizeBtn: document.getElementById('minimize-btn'),
             maximizeBtn: document.getElementById('maximize-btn'),
-            closeBtn: document.getElementById('close-btn')
+            closeBtn: document.getElementById('close-btn'),
+            workspaceIndicator: document.getElementById('workspace-indicator'),
+            workspaceChevron: document.getElementById('workspace-chevron')
         };
     }
     
@@ -38,13 +36,16 @@ class LittleZenWindow {
             }
         });
         
-        this.elements.backBtn.addEventListener('click', () => this.goBack());
-        this.elements.forwardBtn.addEventListener('click', () => this.goForward());
-        this.elements.refreshBtn.addEventListener('click', () => this.refresh());
-        this.elements.homeBtn.addEventListener('click', () => this.goHome());
-        this.elements.menuBtn.addEventListener('click', () => this.showMenu());
+        this.elements.backBtn.addEventListener('command', () => this.goBack());
+        this.elements.forwardBtn.addEventListener('command', () => this.goForward());
+        this.elements.refreshBtn.addEventListener('command', () => this.refresh());
         
-        // Iframe events
+        // Browser events - use proper browser element events
+        this.elements.webContent.addEventListener('DOMContentLoaded', () => {
+            this.onPageLoad();
+        });
+        
+        // Also listen for load event as backup
         this.elements.webContent.addEventListener('load', () => {
             this.onPageLoad();
         });
@@ -56,28 +57,29 @@ class LittleZenWindow {
     }
     
     setupWindowControls() {
-        this.elements.minimizeBtn.addEventListener('click', () => {
-            if (window.electronAPI) {
-                window.electronAPI.minimize();
-            }
+        this.elements.minimizeBtn.addEventListener('command', () => {
+            window.minimize();
         });
         
-        this.elements.maximizeBtn.addEventListener('click', () => {
-            if (window.electronAPI) {
-                window.electronAPI.maximize();
-            }
+        this.elements.maximizeBtn.addEventListener('command', () => {
+            this.toggleMaximize();
         });
         
-        this.elements.closeBtn.addEventListener('click', () => {
-            if (window.electronAPI) {
-                window.electronAPI.close();
-            } else {
-                window.close();
-            }
+        this.elements.closeBtn.addEventListener('command', () => {
+            window.close();
         });
     }
     
+    toggleMaximize() {
+        if (window.windowState === window.STATE_MAXIMIZED) {
+            window.restore();
+        } else {
+            window.maximize();
+        }
+    }
+    
     navigateToUrl(url) {
+        console.log('[Little Zen Window] navigateToUrl called with:', url);
         if (!url) return;
         
         // Add protocol if missing
@@ -90,11 +92,23 @@ class LittleZenWindow {
             }
         }
         
+        console.log('[Little Zen Window] Final URL to load:', url);
+        
         this.setLoading(true);
         this.updateStatus('Loading...');
         
         try {
-            this.elements.webContent.src = url;
+            console.log('[Little Zen Window] Browser docShell available:', !!this.elements.webContent.docShell);
+            console.log('[Little Zen Window] Browser webNavigation available:', !!this.elements.webContent.webNavigation);
+            
+            // Try using fixupAndLoadURIString which is more reliable
+            this.elements.webContent.fixupAndLoadURIString(url, {
+                triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+                loadFlags: Ci.nsIWebNavigation.LOAD_FLAGS_NONE
+            });
+            
+            console.log('[Little Zen Window] fixupAndLoadURIString called successfully');
+            
             this.currentUrl = url;
             this.elements.urlInput.value = url;
             
@@ -107,146 +121,84 @@ class LittleZenWindow {
             
             this.updateNavigationButtons();
         } catch (error) {
-            this.showError('Failed to load page: ' + error.message);
+            console.error('[Little Zen Window] Error in navigateToUrl:', error);
+            
+            // Fallback: try the old loadURI method
+            try {
+                console.log('[Little Zen Window] Trying fallback loadURI method...');
+                const uri = Services.io.newURI(url);
+                this.elements.webContent.loadURI(uri, {
+                    triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+                    loadFlags: Ci.nsIWebNavigation.LOAD_FLAGS_NONE
+                });
+                console.log('[Little Zen Window] Fallback loadURI successful');
+            } catch (fallbackError) {
+                console.error('[Little Zen Window] Fallback also failed:', fallbackError);
+                this.showError('Failed to load page: ' + error.message);
+            }
         }
     }
     
     goBack() {
-        if (this.historyIndex > 0) {
-            this.historyIndex--;
-            const url = this.history[this.historyIndex];
-            this.elements.webContent.src = url;
-            this.elements.urlInput.value = url;
-            this.currentUrl = url;
-            this.updateNavigationButtons();
+        try {
+            if (this.elements.webContent.canGoBack) {
+                this.elements.webContent.goBack();
+                this.updateNavigationButtons();
+            }
+        } catch (e) {
+            console.warn('Error going back:', e);
         }
     }
     
     goForward() {
-        if (this.historyIndex < this.history.length - 1) {
-            this.historyIndex++;
-            const url = this.history[this.historyIndex];
-            this.elements.webContent.src = url;
-            this.elements.urlInput.value = url;
-            this.currentUrl = url;
-            this.updateNavigationButtons();
+        try {
+            if (this.elements.webContent.canGoForward) {
+                this.elements.webContent.goForward();
+                this.updateNavigationButtons();
+            }
+        } catch (e) {
+            console.warn('Error going forward:', e);
         }
     }
     
     refresh() {
-        if (this.currentUrl) {
-            this.setLoading(true);
-            this.elements.webContent.src = this.currentUrl;
-            this.updateStatus('Refreshing...');
+        try {
+            if (this.elements.webContent) {
+                this.setLoading(true);
+                this.elements.webContent.reload();
+                this.updateStatus('Refreshing...');
+            }
+        } catch (e) {
+            console.warn('Error refreshing:', e);
         }
-    }
-    
-    goHome() {
-        const homeUrl = 'https://www.google.com';
-        this.navigateToUrl(homeUrl);
-    }
-    
-    showMenu() {
-        // Create context menu
-        const menu = document.createElement('div');
-        menu.className = 'context-menu';
-        menu.innerHTML = `
-            <div class="menu-item" data-action="new-tab">New Tab</div>
-            <div class="menu-item" data-action="bookmarks">Bookmarks</div>
-            <div class="menu-item" data-action="history">History</div>
-            <div class="menu-separator"></div>
-            <div class="menu-item" data-action="settings">Settings</div>
-            <div class="menu-item" data-action="about">About</div>
-        `;
-        
-        // Position menu
-        const rect = this.elements.menuBtn.getBoundingClientRect();
-        menu.style.position = 'fixed';
-        menu.style.top = rect.bottom + 'px';
-        menu.style.right = (window.innerWidth - rect.right) + 'px';
-        menu.style.zIndex = '1000';
-        
-        document.body.appendChild(menu);
-        
-        // Handle menu clicks
-        menu.addEventListener('click', (e) => {
-            const action = e.target.dataset.action;
-            this.handleMenuAction(action);
-            menu.remove();
-        });
-        
-        // Close menu on outside click
-        setTimeout(() => {
-            document.addEventListener('click', function closeMenu(e) {
-                if (!menu.contains(e.target)) {
-                    menu.remove();
-                    document.removeEventListener('click', closeMenu);
-                }
-            });
-        }, 0);
-    }
-    
-    handleMenuAction(action) {
-        switch (action) {
-            case 'new-tab':
-                // Open new window
-                if (window.electronAPI) {
-                    window.electronAPI.newWindow();
-                }
-                break;
-            case 'bookmarks':
-                this.navigateToUrl('chrome://bookmarks/');
-                break;
-            case 'history':
-                this.navigateToUrl('chrome://history/');
-                break;
-            case 'settings':
-                this.navigateToUrl('chrome://settings/');
-                break;
-            case 'about':
-                this.showAbout();
-                break;
-        }
-    }
-    
-    showAbout() {
-        const aboutHtml = `
-            <div style="padding: 20px; text-align: center; background: #1a1a1a; color: #fff;">
-                <h2>Little Zen Window</h2>
-                <p>A minimal browser window for Zen Browser</p>
-                <p>Version 1.0.0</p>
-            </div>
-        `;
-        this.elements.webContent.srcdoc = aboutHtml;
-        this.elements.urlInput.value = 'about:zen';
-        this.updateStatus('About Little Zen');
     }
     
     onPageLoad() {
         this.setLoading(false);
         this.updateStatus('Ready');
+        this.updateNavigationButtons();
         
         try {
-            // Try to get the actual URL from iframe (may be blocked by CORS)
-            const iframeUrl = this.elements.webContent.contentWindow.location.href;
-            if (iframeUrl && iframeUrl !== 'about:blank') {
-                this.elements.urlInput.value = iframeUrl;
-                this.currentUrl = iframeUrl;
+            // Update URL input with current location
+            const currentURI = this.elements.webContent.currentURI;
+            if (currentURI && currentURI.spec !== 'about:blank') {
+                this.elements.urlInput.value = currentURI.spec;
+                this.currentUrl = currentURI.spec;
             }
         } catch (e) {
-            // CORS blocked, use the src we set
+            // Error getting current URI, this is normal during loading
         }
     }
     
     setLoading(loading) {
         this.isLoading = loading;
         if (loading) {
-            this.elements.container.classList.add('loading');
+            this.elements.progressBar.hidden = false;
+            this.elements.progressBar.value = 0;
             this.animateProgress();
         } else {
-            this.elements.container.classList.remove('loading');
-            this.elements.progressBar.style.display = 'none';
-            this.elements.progressFill.style.width = '0%';
+            this.elements.progressBar.hidden = true;
+            this.elements.progressBar.value = 0;
         }
     }
     
@@ -256,15 +208,15 @@ class LittleZenWindow {
             progress += Math.random() * 30;
             if (progress > 90) progress = 90;
             
-            this.elements.progressFill.style.width = progress + '%';
+            this.elements.progressBar.value = progress;
             
             if (!this.isLoading || progress >= 90) {
                 clearInterval(interval);
                 if (!this.isLoading) {
-                    this.elements.progressFill.style.width = '100%';
+                    this.elements.progressBar.value = 100;
                     setTimeout(() => {
-                        this.elements.progressBar.style.display = 'none';
-                        this.elements.progressFill.style.width = '0%';
+                        this.elements.progressBar.hidden = true;
+                        this.elements.progressBar.value = 0;
                     }, 200);
                 }
             }
@@ -272,91 +224,91 @@ class LittleZenWindow {
     }
     
     updateStatus(text) {
-        this.elements.statusText.textContent = text;
+        this.elements.statusText.setAttribute('label', text);
     }
     
     updateNavigationButtons() {
-        this.elements.backBtn.disabled = this.historyIndex <= 0;
-        this.elements.forwardBtn.disabled = this.historyIndex >= this.history.length - 1;
+        try {
+            // Use try-catch since canGoBack/canGoForward might not be immediately available
+            this.elements.backBtn.disabled = !this.elements.webContent.canGoBack;
+            this.elements.forwardBtn.disabled = !this.elements.webContent.canGoForward;
+        } catch (e) {
+            // Browser element might not be fully initialized yet
+            this.elements.backBtn.disabled = true;
+            this.elements.forwardBtn.disabled = true;
+        }
     }
     
     showError(message) {
-        this.elements.container.classList.add('error');
-        this.elements.webContent.style.display = 'none';
-        
-        const errorDiv = document.createElement('div');
-        errorDiv.innerHTML = `
-            <div style="text-align: center; padding: 40px;">
-                <h2>Page Load Error</h2>
-                <p>${message}</p>
-                <button onclick="window.zenWindow.retry()" style="margin-top: 20px; padding: 8px 16px; background: #0078d4; color: white; border: none; border-radius: 4px; cursor: pointer;">Retry</button>
-            </div>
-        `;
-        this.elements.contentArea.appendChild(errorDiv);
-        
         this.setLoading(false);
         this.updateStatus('Error loading page');
-    }
-    
-    retry() {
-        this.elements.container.classList.remove('error');
-        this.elements.webContent.style.display = 'block';
-        const errorDiv = this.elements.contentArea.querySelector('div');
-        if (errorDiv) errorDiv.remove();
-        
-        if (this.currentUrl) {
-            this.navigateToUrl(this.currentUrl);
-        }
+        console.error('Little Zen Window Error:', message);
     }
     
     // Public method to load URL from external source
     loadUrl(url) {
-        this.navigateToUrl(url);
+        console.log('[Little Zen Window] loadUrl called with:', url);
+        
+        // Wait for browser element to be fully initialized
+        if (this.elements.webContent.docShell) {
+            // Browser is ready, load immediately
+            this.navigateToUrl(url);
+        } else {
+            // Browser not ready yet, wait a bit and try again
+            console.log('[Little Zen Window] Browser not ready, waiting...');
+            setTimeout(() => {
+                if (this.elements.webContent.docShell) {
+                    this.navigateToUrl(url);
+                } else {
+                    // Try one more time with a longer delay
+                    setTimeout(() => {
+                        this.navigateToUrl(url);
+                    }, 500);
+                }
+            }, 100);
+        }
     }
 }
 
-// Initialize when DOM is loaded
-document.addEventListener('DOMContentLoaded', () => {
+// Initialize when window loads
+window.addEventListener('load', () => {
+    console.log('[Little Zen Window] Window loaded, initializing...');
+    
     window.zenWindow = new LittleZenWindow();
     
-    // Check for URL parameter
+    // Check for URL parameter (for file:// URLs)
     const urlParams = new URLSearchParams(window.location.search);
-    const initialUrl = urlParams.get('url');
+    let initialUrl = urlParams.get('url');
+    console.log('[Little Zen Window] URL from search params:', initialUrl);
+    
+    // Check for window arguments (for chrome:// URLs)
+    if (!initialUrl && window.arguments && window.arguments.length > 0) {
+        console.log('[Little Zen Window] Checking window arguments, length:', window.arguments.length);
+        try {
+            // Get URL from window arguments
+            const urlArg = window.arguments[0];
+            console.log('[Little Zen Window] First argument:', urlArg, typeof urlArg);
+            
+            if (urlArg && urlArg.QueryInterface) {
+                // It's an nsISupportsString
+                initialUrl = urlArg.QueryInterface(Components.interfaces.nsISupportsString).data;
+                console.log('[Little Zen Window] URL from nsISupportsString:', initialUrl);
+            } else if (typeof urlArg === 'string') {
+                // It's a plain string
+                initialUrl = urlArg;
+                console.log('[Little Zen Window] URL from string:', initialUrl);
+            }
+        } catch (e) {
+            console.warn('[Little Zen Window] Error reading window arguments:', e);
+        }
+    } else {
+        console.log('[Little Zen Window] No window arguments found');
+    }
+    
     if (initialUrl) {
+        console.log('[Little Zen Window] Loading initial URL:', initialUrl);
         window.zenWindow.loadUrl(decodeURIComponent(initialUrl));
+    } else {
+        console.log('[Little Zen Window] No initial URL found');
     }
 });
-
-// Add context menu styles
-const contextMenuStyles = `
-.context-menu {
-    background: #2d2d2d;
-    border: 1px solid #404040;
-    border-radius: 4px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-    min-width: 150px;
-    padding: 4px 0;
-    font-size: 13px;
-}
-
-.menu-item {
-    padding: 8px 16px;
-    cursor: pointer;
-    color: #cccccc;
-    transition: background-color 0.2s ease;
-}
-
-.menu-item:hover {
-    background: #404040;
-}
-
-.menu-separator {
-    height: 1px;
-    background: #404040;
-    margin: 4px 0;
-}
-`;
-
-const styleSheet = document.createElement('style');
-styleSheet.textContent = contextMenuStyles;
-document.head.appendChild(styleSheet);

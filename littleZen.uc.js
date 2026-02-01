@@ -7,21 +7,22 @@
 (function() {
     'use strict';
     
-    const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
+    // Services is available globally in Firefox chrome context
     
     class LittleZenHandler {
         constructor() {
             this.customWindows = new Set();
+            this.originalBrowserDOMWindow = null;
+            this.browserWindow = null;
             this.init();
         }
         
         init() {
             console.log("[LittleZen] Initializing custom window handler");
-            this.setupTabInterception();
-            this.setupExternalLinkHandler();
+            this.setupBrowserDOMWindowInterception();
         }
         
-        setupTabInterception() {
+        setupBrowserDOMWindowInterception() {
             const wm = Cc["@mozilla.org/appshell/window-mediator;1"].getService(Ci.nsIWindowMediator);
             const recentWindow = wm.getMostRecentWindow("navigator:browser");
             
@@ -30,105 +31,188 @@
                 return;
             }
             
-            // Listen for new tabs
-            recentWindow.gBrowser.tabContainer.addEventListener("TabOpen", (event) => {
-                const tab = event.target;
-                const browser = tab.linkedBrowser;
+            this.browserWindow = recentWindow;
+            
+            // Store reference to original browserDOMWindow
+            this.originalBrowserDOMWindow = recentWindow.browserDOMWindow;
+            
+            if (!this.originalBrowserDOMWindow) {
+                console.warn("[LittleZen] No browserDOMWindow found");
+                return;
+            }
+            
+            // Create wrapper object that implements nsIBrowserDOMWindow
+            const self = this;
+            const wrappedBrowserDOMWindow = {
+                // Delegate all properties to original
+                __proto__: this.originalBrowserDOMWindow,
                 
-                // Check if this is an external tab (from another app)
-                if (this.isExternalTab(tab)) {
-                    console.log("[LittleZen] External tab detected, creating custom window");
+                // Override openURI method
+                openURI: function(aURI, aOpener, aWhere, aContext, aTriggeringPrincipal, aCsp) {
+                    console.log("[LittleZen] openURI called with:", {
+                        uri: aURI ? aURI.spec : "null",
+                        where: aWhere,
+                        context: aContext,
+                        isExternalContext: aContext === Ci.nsIBrowserDOMWindow.OPEN_EXTERNAL,
+                        whereNewWindow: aWhere === Ci.nsIBrowserDOMWindow.OPEN_NEWWINDOW,
+                        whereNewTab: aWhere === Ci.nsIBrowserDOMWindow.OPEN_NEWTAB
+                    });
                     
-                    // Get the URL that would be loaded
-                    const url = browser.currentURI?.spec || browser.getAttribute("src");
+                    // Primary check: context parameter (most reliable for external calls)
+                    const isExternalContext = (aContext === Ci.nsIBrowserDOMWindow.OPEN_EXTERNAL);
                     
-                    if (url && url !== "about:blank") {
-                        // Prevent the tab from loading in the main browser
-                        event.preventDefault();
+                    // Secondary check: flags parameter (fallback for some cases)
+                    // Note: aContext might actually be aFlags in some Firefox versions
+                    const hasExternalFlag = (typeof aContext === 'number' && 
+                        (aContext & Ci.nsIWebNavigation.LOAD_FLAGS_FROM_EXTERNAL));
+                    
+                    const isExternalCall = isExternalContext || hasExternalFlag;
+                    
+                    if (isExternalCall) {
+                        console.log("[LittleZen] External URI detected, intercepting:", aURI.spec);
+                        console.log("[LittleZen] Detection method:", isExternalContext ? "context" : "flags");
                         
-                        // Close the tab
-                        recentWindow.gBrowser.removeTab(tab);
+                        // Prevent focus stealing by not calling the original method
+                        // Instead, open our custom window
+                        self.openCustomWindow(aURI.spec);
                         
-                        // Open custom window instead
-                        this.openCustomWindow(url);
+                        // Return null to indicate we handled the request
+                        // This prevents the main browser from opening a tab
+                        return null;
                     }
+                    
+                    // For non-external requests, delegate to original implementation
+                    return self.originalBrowserDOMWindow.openURI.call(
+                        self.originalBrowserDOMWindow,
+                        aURI, aOpener, aWhere, aContext, aTriggeringPrincipal, aCsp
+                    );
+                },
+                
+                // Override openURIInFrame method if it exists
+                openURIInFrame: function(aURI, aParams, aWhere, aContext, aName) {
+                    // Primary check: context parameter
+                    const isExternalContext = (aContext === Ci.nsIBrowserDOMWindow.OPEN_EXTERNAL);
+                    
+                    // Secondary check: flags parameter (fallback)
+                    const hasExternalFlag = (typeof aContext === 'number' && 
+                        (aContext & Ci.nsIWebNavigation.LOAD_FLAGS_FROM_EXTERNAL));
+                    
+                    const isExternalCall = isExternalContext || hasExternalFlag;
+                    
+                    if (isExternalCall) {
+                        console.log("[LittleZen] External URI in frame detected, intercepting:", aURI.spec);
+                        self.openCustomWindow(aURI.spec);
+                        return null;
+                    }
+                    
+                    // Delegate to original if it exists
+                    if (self.originalBrowserDOMWindow.openURIInFrame) {
+                        return self.originalBrowserDOMWindow.openURIInFrame.call(
+                            self.originalBrowserDOMWindow,
+                            aURI, aParams, aWhere, aContext, aName
+                        );
+                    }
+                    
+                    return null;
+                },
+                
+                // Ensure we implement the nsIBrowserDOMWindow interface properly
+                QueryInterface: function(iid) {
+                    if (iid.equals(Ci.nsIBrowserDOMWindow) || 
+                        iid.equals(Ci.nsISupports)) {
+                        return this;
+                    }
+                    throw Components.Exception("", Cr.NS_ERROR_NO_INTERFACE);
                 }
-            }, true);
-        }
-        
-        setupExternalLinkHandler() {
-            // Listen for external protocol handlers
-            Services.obs.addObserver(this, "http-on-opening-request", false);
-        }
-        
-        isExternalTab(tab) {
-            // Check various indicators that this tab came from an external source
-            return (
-                !tab.ownerTab && // No parent tab
-                tab.getAttribute("toplevel") === "true" || // Top-level navigation
-                tab.hasAttribute("external") || // Explicitly marked as external
-                tab.getAttribute("usercontextid") === null // No container context
-            );
+            };
+            
+            // Replace the browserDOMWindow with our wrapper
+            recentWindow.browserDOMWindow = wrappedBrowserDOMWindow;
+            
+            console.log("[LittleZen] browserDOMWindow interception setup complete");
         }
         
         openCustomWindow(url) {
             try {
-                const windowPath = this.getCustomWindowPath();
-                const encodedUrl = encodeURIComponent(url);
-                const windowUrl = `file://${windowPath}?url=${encodedUrl}`;
-                
                 console.log("[LittleZen] Opening custom window for:", url);
                 
-                const customWindow = window.open(
-                    windowUrl,
-                    "_blank",
-                    "width=1200,height=800,resizable=yes,scrollbars=yes,status=yes,location=yes,menubar=no,toolbar=no"
+                // For chrome:// URLs, we need to pass the URL as window arguments
+                const args = Cc["@mozilla.org/array;1"].createInstance(Ci.nsIMutableArray);
+                const urlString = Cc["@mozilla.org/supports-string;1"].createInstance(Ci.nsISupportsString);
+                urlString.data = url;
+                args.appendElement(urlString);
+                
+                console.log("[LittleZen] Created arguments array with URL:", urlString.data);
+                
+                const windowURL = this.getCustomWindowURL();
+                console.log("[LittleZen] Window URL:", windowURL);
+                
+                // Use Services.ww.openWindow for proper chrome window creation
+                const customWindow = Services.ww.openWindow(
+                    null, // parent window (null for top-level)
+                    windowURL, // chrome URL
+                    "_blank", // window name
+                    "chrome,resizable=yes,scrollbars=yes,status=yes,width=1200,height=800", // features
+                    args // arguments containing the URL
                 );
                 
                 if (customWindow) {
                     this.customWindows.add(customWindow);
+                    console.log("[LittleZen] Custom window created successfully");
+                    
+                    // Ensure the custom window gets focus instead of the main browser
+                    customWindow.addEventListener('load', () => {
+                        try {
+                            // Set focus to the new window
+                            customWindow.focus();
+                            
+                            // Bring window to front without setting read-only properties
+                            if (customWindow.gBrowser) {
+                                customWindow.gBrowser.selectedBrowser.focus();
+                            }
+                            
+                            console.log("[LittleZen] Custom window focused successfully");
+                        } catch (e) {
+                            // Focus management is not critical, just log and continue
+                            console.log("[LittleZen] Focus set via window.focus()");
+                        }
+                    });
                     
                     // Clean up reference when window closes
                     customWindow.addEventListener('beforeunload', () => {
                         this.customWindows.delete(customWindow);
                     });
+                    
+                    return customWindow;
                 } else {
-                    console.error("[LittleZen] Failed to open custom window, falling back to regular tab");
-                    this.fallbackToRegularTab(url);
+                    console.error("[LittleZen] Failed to open custom window");
+                    return null;
                 }
                 
             } catch (error) {
                 console.error("[LittleZen] Error opening custom window:", error);
-                this.fallbackToRegularTab(url);
+                return null;
             }
         }
         
-        getCustomWindowPath() {
-            // Get the profile directory path
-            const profileDir = Services.dirsvc.get("ProfD", Ci.nsIFile);
-            const windowPath = profileDir.path + "\\chrome\\sine-mods\\little-zen\\window\\custom-window.html";
-            return windowPath.replace(/\\/g, '/');
+        getCustomWindowURL() {
+            // Use chrome:// protocol for proper chrome window creation
+            return "chrome://sine/content/little-zen/window/custom-window.xhtml";
         }
         
-        fallbackToRegularTab(url) {
-            // If custom window fails, open in regular tab
-            const wm = Cc["@mozilla.org/appshell/window-mediator;1"].getService(Ci.nsIWindowMediator);
-            const recentWindow = wm.getMostRecentWindow("navigator:browser");
-            
-            if (recentWindow) {
-                recentWindow.gBrowser.addTab(url);
-            }
+        observe(subject, topic, _data) {
+            // This method can be removed or used for other purposes
+            // since we're now intercepting at the browserDOMWindow level
         }
         
-        observe(subject, topic, data) {
-            if (topic === "http-on-opening-request") {
-                // Handle HTTP requests that might be from external sources
-                const httpChannel = subject.QueryInterface(Ci.nsIHttpChannel);
-                const loadInfo = httpChannel.loadInfo;
-                
-                if (loadInfo && loadInfo.externalContentPolicyType === Ci.nsIContentPolicy.TYPE_DOCUMENT) {
-                    // This might be an external request
-                    console.log("[LittleZen] External HTTP request detected:", httpChannel.URI.spec);
+        // Restore original browserDOMWindow on cleanup
+        restoreBrowserDOMWindow() {
+            if (this.browserWindow && this.originalBrowserDOMWindow) {
+                try {
+                    this.browserWindow.browserDOMWindow = this.originalBrowserDOMWindow;
+                    console.log("[LittleZen] browserDOMWindow restored");
+                } catch (e) {
+                    console.warn("[LittleZen] Error restoring browserDOMWindow:", e);
                 }
             }
         }
@@ -152,6 +236,38 @@
             });
             this.customWindows.clear();
         }
+        
+        // Method to test external tab detection (for debugging)
+        testExternalDetection(url) {
+            console.log("[LittleZen] Testing external detection with URL:", url);
+            this.openCustomWindow(url);
+        }
+        
+        // Get information about the current browserDOMWindow setup
+        getBrowserDOMWindowInfo() {
+            return {
+                hasOriginal: !!this.originalBrowserDOMWindow,
+                isWrapped: this.browserWindow && this.browserWindow.browserDOMWindow !== this.originalBrowserDOMWindow,
+                customWindowsCount: this.customWindows.size
+            };
+        }
+        
+        // Method to manually restore browserDOMWindow (for debugging)
+        manualRestore() {
+            this.restoreBrowserDOMWindow();
+        }
+        
+        // Debug method to log browserDOMWindow constants
+        logBrowserDOMWindowConstants() {
+            console.log("[LittleZen] browserDOMWindow Constants:", {
+                OPEN_DEFAULTWINDOW: Ci.nsIBrowserDOMWindow.OPEN_DEFAULTWINDOW,
+                OPEN_CURRENTWINDOW: Ci.nsIBrowserDOMWindow.OPEN_CURRENTWINDOW,
+                OPEN_NEWWINDOW: Ci.nsIBrowserDOMWindow.OPEN_NEWWINDOW,
+                OPEN_NEWTAB: Ci.nsIBrowserDOMWindow.OPEN_NEWTAB,
+                OPEN_EXTERNAL: Ci.nsIBrowserDOMWindow.OPEN_EXTERNAL,
+                LOAD_FLAGS_FROM_EXTERNAL: Ci.nsIWebNavigation.LOAD_FLAGS_FROM_EXTERNAL
+            });
+        }
     }
     
     // Initialize the handler
@@ -171,7 +287,7 @@
     window.addEventListener('beforeunload', () => {
         if (window.littleZenHandler) {
             window.littleZenHandler.closeAllCustomWindows();
-            Services.obs.removeObserver(window.littleZenHandler, "http-on-opening-request");
+            window.littleZenHandler.restoreBrowserDOMWindow();
         }
     });
     
