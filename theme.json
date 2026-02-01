@@ -1,0 +1,16 @@
+{
+  "id": "little-zen",
+  "name": "Little Zen",
+  "description": "A little viewer for sites in Zen",
+  "style": {
+    "chrome": "chrome.css"
+  },
+  "scripts": {
+    "littleZen.uc.js": {
+      "include": ["chrome://browser/content/browser.xhtml"]
+    }
+  },
+  "version": "0.1.0",
+  "createdAt": "2026-01-28",
+  "updatedAt": "2026-01-28"
+}
