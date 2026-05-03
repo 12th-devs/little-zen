@@ -2,54 +2,6 @@
 // CRITICAL: Set Zen Sync Flag immediately at global scope
 window._zenStartupSyncFlag = "synced";
 
-// CRITICAL: Suppress CustomizableUI "non-browser window" warnings
-window.isChromeWindow = true;
-window.TOOLBAR_REORDERABLE = false;
-
-// CRITICAL: Prevent CustomizableUI errors by overriding early
-(function preventCustomizableUIErrors() {
-    // Override CustomizableUI methods before they can cause errors
-    const originalCustomizableUI = window.CustomizableUI;
-    
-    // Create a more comprehensive proxy to intercept CustomizableUI calls
-    window.CustomizableUI = new Proxy(originalCustomizableUI || {}, {
-        get: function(target, prop) {
-            // Block all widget building methods
-            if (prop === 'buildWidget' || prop === 'buildWidgetNode' || prop === 'createWidget') {
-                return function(...args) {
-                    console.log('[Little Zen Window] Blocked CustomizableUI.' + prop + ' call');
-                    return null;
-                };
-            }
-            if (prop === 'isWindowSupported') {
-                return function(win) {
-                    // Return false for our window to prevent CustomizableUI from trying to manage it
-                    if (win === window) {
-                        console.log('[Little Zen Window] CustomizableUI.isWindowSupported called for our window - returning false');
-                        return false;
-                    }
-                    return target[prop] ? target[prop].call(target, win) : false;
-                };
-            }
-            // Block other potentially problematic methods
-            if (prop === 'registerWindow' || prop === 'unregisterWindow') {
-                return function(...args) {
-                    console.log('[Little Zen Window] Blocked CustomizableUI.' + prop + ' call');
-                    return;
-                };
-            }
-            return target[prop];
-        }
-    });
-    
-    // Also override at the global level to catch any direct access
-    if (typeof globalThis !== 'undefined') {
-        globalThis.CustomizableUI = window.CustomizableUI;
-    }
-    
-    console.log('[Little Zen Window] CustomizableUI error prevention initialized');
-})();
-
 // CRITICAL: Initialize gNotificationBox immediately to prevent ProcessHangMonitor crashes
 window.gNotificationBox = {
     getNotificationWithValue: () => null,
@@ -505,68 +457,6 @@ window.gZenWorkspaces = {
     console.log('[Little Zen Window] Immediate gBrowser shim initialized');
 })();
 
-// CRITICAL: Initialize CustomizableUI compatibility to prevent "non-browser window" errors
-(function initializeCustomizableUICompatibility() {
-    // Mock CustomizableUI for this window to prevent extension errors
-    if (typeof CustomizableUI !== 'undefined') {
-        try {
-            // Override the window type detection for CustomizableUI
-            const originalIsWindowSupported = CustomizableUI.isWindowSupported;
-            if (originalIsWindowSupported) {
-                CustomizableUI.isWindowSupported = function(win) {
-                    // Always return true for our Little Zen Window
-                    if (win === window) {
-                        return true;
-                    }
-                    return originalIsWindowSupported.call(this, win);
-                };
-            }
-            
-            // Mock the window registration if needed
-            if (CustomizableUI.registerWindow) {
-                CustomizableUI.registerWindow(window);
-            }
-            
-            console.log('[Little Zen Window] CustomizableUI compatibility initialized');
-        } catch (e) {
-            console.warn('[Little Zen Window] Could not initialize CustomizableUI compatibility:', e);
-        }
-    }
-    
-    // Add window identification properties that CustomizableUI checks
-    window.gNavToolbox = document.getElementById('navigation-bar') || {
-        palette: document.createElement('toolbarpalette')
-    };
-    
-    // Mock toolbar customization properties
-    window.gCustomizeMode = {
-        _handler: null,
-        enter: () => {},
-        exit: () => {},
-        toggle: () => {}
-    };
-    
-    // Add browser window identification
-    window._gBrowser = window.gBrowser; // Reference for CustomizableUI
-    
-    // Add gFissionBrowser for compatibility checks
-    if (typeof window.gFissionBrowser === 'undefined') {
-        // Try to get it from the main window, or default to true (modern Firefox)
-        const mainWindow = Services.wm.getMostRecentWindow("navigator:browser");
-        window.gFissionBrowser = mainWindow?.gFissionBrowser ?? true;
-        console.log('[Little Zen Window] Set gFissionBrowser to:', window.gFissionBrowser);
-    }
-    
-    // Ensure the window element has proper browser window attributes
-    const windowElement = document.documentElement;
-    if (windowElement) {
-        windowElement.setAttribute('chromehidden', '');
-        windowElement.setAttribute('windowtype', 'navigator:browser');
-        windowElement.setAttribute('id', 'main-window'); // Some extensions check for this
-    }
-    
-    console.log('[Little Zen Window] Window identification properties set');
-})();
 class LittleZenWindow {
     constructor() {
         this.currentUrl = '';
@@ -600,212 +490,14 @@ class LittleZenWindow {
             workspaceChevron: document.getElementById('workspace-chevron'),
             tabContainer: document.getElementById('tabbrowser-tabs')
         };
-        
-        // Ensure the browser element is properly initialized
+
+        // Set a unique permanentKey object for extension/adoption compatibility
         if (this.elements.webContent) {
-            console.log('[Little Zen Window] Initializing browser element...');
-            
-            // Force browser initialization by accessing key properties
-            try {
-                // Check if docShell is already available
-                if (this.elements.webContent.docShell) {
-                    console.log('[Little Zen Window] Browser docShell already available');
-                } else {
-                    console.log('[Little Zen Window] Browser docShell not available, forcing initialization...');
-                    
-                    // Try multiple approaches to force docShell creation
-                    
-                    // Approach 1: Ensure proper attributes are set
-                    this.elements.webContent.setAttribute('type', 'content');
-                    this.elements.webContent.setAttribute('remote', 'true');
-                    
-                    // Approach 2: Try to construct the browser frame
-                    try {
-                        // Force the browser to construct its frame
-                        if (typeof this.elements.webContent.construct === 'function') {
-                            this.elements.webContent.construct();
-                            console.log('[Little Zen Window] Browser construct() called');
-                        } else {
-                            console.log('[Little Zen Window] Browser construct() method not available');
-                        }
-                    } catch (e) {
-                        console.log('[Little Zen Window] Browser construct() failed:', e);
-                    }
-                    
-                    // Approach 3: Force webNavigation access to trigger initialization
-                    try {
-                        const webNav = this.elements.webContent.webNavigation;
-                        if (webNav) {
-                            console.log('[Little Zen Window] Browser webNavigation available');
-                            // Try to access docShell through webNavigation
-                            if (webNav.QueryInterface) {
-                                const docShell = webNav.QueryInterface(Ci.nsIDocShell);
-                                if (docShell) {
-                                    console.log('[Little Zen Window] DocShell available through webNavigation QI');
-                                }
-                            }
-                        }
-                    } catch (e) {
-                        console.log('[Little Zen Window] Could not access webNavigation or QI to docShell:', e);
-                    }
-                    
-                    // Approach 4: Try to access browsingContext
-                    try {
-                        const bc = this.elements.webContent.browsingContext;
-                        if (bc) {
-                            console.log('[Little Zen Window] Browser browsingContext available');
-                            if (bc.docShell) {
-                                console.log('[Little Zen Window] DocShell available through browsingContext');
-                            }
-                        }
-                    } catch (e) {
-                        console.log('[Little Zen Window] browsingContext not yet available:', e);
-                    }
-                    
-                    // Approach 5: Ensure permanentKey is properly set as unique object
-                    if (!this.elements.webContent.permanentKey || typeof this.elements.webContent.permanentKey !== 'object') {
-                        this.elements.webContent.permanentKey = {
-                            id: 'little-zen-browser-' + Date.now(),
-                            created: Date.now(),
-                            adoptable: true
-                        };
-                        console.log('[Little Zen Window] Set unique permanentKey object during initialization');
-                    }
-                    
-                    // Approach 6: Force frame loading by setting src
-                    try {
-                        // Temporarily set src to force frame construction
-                        const originalSrc = this.elements.webContent.getAttribute('src');
-                        this.elements.webContent.setAttribute('src', 'about:blank');
-                        
-                        // Reset to original src after a brief delay
-                        setTimeout(() => {
-                            if (originalSrc) {
-                                this.elements.webContent.setAttribute('src', originalSrc);
-                            }
-                        }, 10);
-                    } catch (e) {
-                        console.log('[Little Zen Window] Could not set src for frame construction:', e);
-                    }
-                    
-                    // Give it a moment to initialize
-                    setTimeout(() => {
-                        console.log('[Little Zen Window] Post-initialization docShell check:', !!this.elements.webContent.docShell);
-                        if (this.elements.webContent.docShell) {
-                            console.log('[Little Zen Window] DocShell successfully initialized!');
-                        } else {
-                            console.warn('[Little Zen Window] DocShell still not available after initialization attempts');
-                            
-                            // Try one more approach - force a layout flush
-                            try {
-                                this.elements.webContent.getBoundingClientRect();
-                                console.log('[Little Zen Window] Forced layout flush');
-                                
-                                setTimeout(() => {
-                                    console.log('[Little Zen Window] Post-flush docShell check:', !!this.elements.webContent.docShell);
-                                }, 50);
-                            } catch (e) {
-                                console.log('[Little Zen Window] Could not force layout flush:', e);
-                            }
-                        }
-                    }, 100);
-                }
-            } catch (e) {
-                console.warn('[Little Zen Window] Error during browser initialization:', e);
-            }
-        }
-        
-        // Ensure the web-content element has a permanent key for extension compatibility
-        if (this.elements.webContent && !this.elements.webContent.permanentKey) {
-            // permanentKey must be a unique object, not a boolean
             this.elements.webContent.permanentKey = {
                 id: 'little-zen-browser-' + Date.now(),
                 created: Date.now()
             };
-            console.log('[Little Zen Window] Set permanentKey object for web-content element');
-        }
-        
-        // Add additional browser properties for extension compatibility
-        if (this.elements.webContent) {
-            // Ensure browser has required properties for tab adoption
-            if (!this.elements.webContent.outerWindowID) {
-                this.elements.webContent.outerWindowID = Date.now();
-            }
-            
-            // Ensure permanentKey is properly structured for adoption (must be unique object)
-            if (!this.elements.webContent.permanentKey || typeof this.elements.webContent.permanentKey !== 'object') {
-                this.elements.webContent.permanentKey = {
-                    id: 'little-zen-browser-' + Date.now(),
-                    created: Date.now(),
-                    adoptable: true,
-                    zenCompatible: true
-                };
-                console.log('[Little Zen Window] Fixed permanentKey to be unique object');
-            }
-            
-            // Add browser identification properties
             this.elements.webContent._zenLittleWindow = true;
-            this.elements.webContent._zenCompatible = true;
-            
-            // Fix: Use Object.defineProperty for read-only properties like isRemoteBrowser
-            try {
-                Object.defineProperty(this.elements.webContent, 'isRemoteBrowser', {
-                    get: () => true,
-                    configurable: true
-                });
-            } catch (e) {
-                console.warn('[Little Zen Window] Could not define isRemoteBrowser property:', e);
-            }
-            
-            // Add extension compatibility properties safely
-            try {
-                // Use Object.defineProperty for read-only properties like hasContentOpener
-                Object.defineProperty(this.elements.webContent, 'hasContentOpener', {
-                    get: () => false,
-                    configurable: true
-                });
-            } catch (e) {
-                console.warn('[Little Zen Window] Could not define hasContentOpener property:', e);
-            }
-            
-            // Add additional properties that might be checked during adoption
-            try {
-                // Ensure the browser has a frameLoader for adoption compatibility
-                if (!this.elements.webContent.frameLoader) {
-                    Object.defineProperty(this.elements.webContent, 'frameLoader', {
-                        get: () => ({
-                            browsingContext: {
-                                id: Date.now(),
-                                embedderElement: this.elements.webContent
-                            }
-                        }),
-                        configurable: true
-                    });
-                }
-                
-                // Add messageManager compatibility
-                if (!this.elements.webContent.messageManager) {
-                    this.elements.webContent.messageManager = {
-                        loadFrameScript: () => {},
-                        removeDelayedFrameScript: () => {},
-                        sendAsyncMessage: () => {},
-                        addMessageListener: () => {},
-                        removeMessageListener: () => {}
-                    };
-                }
-                
-                // Add docShellIsActive property
-                Object.defineProperty(this.elements.webContent, 'docShellIsActive', {
-                    get: () => true,
-                    set: () => {},
-                    configurable: true
-                });
-                
-            } catch (e) {
-                console.warn('[Little Zen Window] Could not add additional browser properties:', e);
-            }
-            
-            console.log('[Little Zen Window] Enhanced web-content element for adoption compatibility');
         }
     }
     
@@ -860,40 +552,28 @@ class LittleZenWindow {
     }
     
     navigateToUrl(url) {
-        console.log('[Little Zen Window] navigateToUrl called with:', url);
         if (!url) return;
         
-        // Add protocol if missing
         if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('file://')) {
             if (url.includes('.') && !url.includes(' ')) {
                 url = 'https://' + url;
             } else {
-                // Treat as search query
                 url = `https://www.google.com/search?q=${encodeURIComponent(url)}`;
             }
         }
-        
-        console.log('[Little Zen Window] Final URL to load:', url);
         
         this.setLoading(true);
         this.updateStatus('Loading...');
         
         try {
-            console.log('[Little Zen Window] Browser docShell available:', !!this.elements.webContent.docShell);
-            console.log('[Little Zen Window] Browser webNavigation available:', !!this.elements.webContent.webNavigation);
-            
-            // Try using fixupAndLoadURIString which is more reliable
             this.elements.webContent.fixupAndLoadURIString(url, {
                 triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
                 loadFlags: Ci.nsIWebNavigation.LOAD_FLAGS_NONE
             });
             
-            console.log('[Little Zen Window] fixupAndLoadURIString called successfully');
-            
             this.currentUrl = url;
             this.elements.urlInput.value = url;
             
-            // Add to history
             if (this.historyIndex < this.history.length - 1) {
                 this.history = this.history.slice(0, this.historyIndex + 1);
             }
@@ -902,21 +582,8 @@ class LittleZenWindow {
             
             this.updateNavigationButtons();
         } catch (error) {
-            console.error('[Little Zen Window] Error in navigateToUrl:', error);
-            
-            // Fallback: try the old loadURI method
-            try {
-                console.log('[Little Zen Window] Trying fallback loadURI method...');
-                const uri = Services.io.newURI(url);
-                this.elements.webContent.loadURI(uri, {
-                    triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
-                    loadFlags: Ci.nsIWebNavigation.LOAD_FLAGS_NONE
-                });
-                console.log('[Little Zen Window] Fallback loadURI successful');
-            } catch (fallbackError) {
-                console.error('[Little Zen Window] Fallback also failed:', fallbackError);
-                this.showError('Failed to load page: ' + error.message);
-            }
+            console.error('[Little Zen Window] Error loading URL:', error);
+            this.showError('Failed to load page: ' + error.message);
         }
     }
     
@@ -1028,42 +695,22 @@ class LittleZenWindow {
     
     // Public method to load URL from external source
     loadUrl(url) {
-        console.log('[Little Zen Window] loadUrl called with:', url);
-        
-        // Check if browser is immediately ready (both webNavigation and docShell)
         const browser = this.elements.webContent;
-        if (browser && browser.docShell && browser.webNavigation) {
-            console.log('[Little Zen Window] Browser ready, loading URL immediately:', url);
+        // webNavigation is available on remote browsers (docShell lives in the content process)
+        if (browser?.webNavigation) {
             this.navigateToUrl(url);
         } else {
-            // Wait for browser readiness with timeout
-            console.log('[Little Zen Window] Browser not ready, waiting for docShell and webNavigation...');
+            // Browser frame not yet attached — wait one tick and retry
             let attempts = 0;
-            const maxAttempts = 50; // Increased attempts
-            
             const tryLoad = () => {
-                attempts++;
-                if (browser && browser.docShell && browser.webNavigation) {
-                    console.log('[Little Zen Window] Browser ready after', attempts, 'attempts, loading URL:', url);
+                if (browser?.webNavigation) {
                     this.navigateToUrl(url);
-                } else if (attempts < maxAttempts) {
-                    // Log current state for debugging
-                    if (attempts % 10 === 0) {
-                        console.log('[Little Zen Window] Browser state check:', {
-                            attempt: attempts,
-                            hasDocShell: !!browser?.docShell,
-                            hasWebNavigation: !!browser?.webNavigation,
-                            browserType: browser?.getAttribute?.('type'),
-                            browserRemote: browser?.getAttribute?.('remote')
-                        });
-                    }
-                    setTimeout(tryLoad, 100);
+                } else if (++attempts < 20) {
+                    setTimeout(tryLoad, 50);
                 } else {
-                    console.warn('[Little Zen Window] Browser readiness timeout, trying to load anyway:', url);
-                    this.navigateToUrl(url);
+                    this.navigateToUrl(url); // try anyway
                 }
             };
-            
             setTimeout(tryLoad, 50);
         }
     }
@@ -1307,804 +954,140 @@ class LittleZenWindow {
     
     // Enhance the pre-initialized gBrowser shim with instance-specific functionality
     enhanceGBrowserShim() {
-        console.log('[Little Zen Window] Enhancing gBrowser shim with instance functionality...');
-        
-        try {
-            // Update the mock tab's workspace reference
-            if (window.gBrowser && window.gBrowser.selectedTab) {
-                window.gBrowser.selectedTab.zenWindow = this;
-                // Store reference to mock tab for easier access
-                this.mockSelectedTab = window.gBrowser.selectedTab;
-            }
-            
-            // Set up browser readiness monitoring (non-blocking)
-            this.monitorBrowserReadiness();
-            
-            console.log('[Little Zen Window] gBrowser shim enhancement complete');
-            
-        } catch (error) {
-            console.error('[Little Zen Window] Error enhancing gBrowser shim:', error);
+        if (window.gBrowser?.selectedTab) {
+            window.gBrowser.selectedTab.zenWindow = this;
+            this.mockSelectedTab = window.gBrowser.selectedTab;
         }
+        // Dispatch ready event so anything waiting on ZenWindowReady can proceed
+        window._zenCompositorReady = true;
+        window.dispatchEvent(new CustomEvent('ZenWindowReady', { detail: { compositorReady: true } }));
     }
     
-    // Non-blocking browser readiness monitoring
-    monitorBrowserReadiness() {
-        let attempts = 0;
-        const maxAttempts = 50;
-        
-        const checkReadiness = () => {
-            attempts++;
-            const browser = this.elements.webContent;
-            
-            if (browser && browser.docShell && browser.webNavigation) {
-                console.log('[Little Zen Window] Browser ready after', attempts, 'attempts');
-                this.onBrowserReady();
-                return;
-            }
-            
-            if (attempts < maxAttempts) {
-                setTimeout(checkReadiness, 100);
-            } else {
-                console.warn('[Little Zen Window] Browser readiness timeout, continuing anyway');
-                this.onBrowserReady();
-            }
-        };
-        
-        // Start monitoring
-        setTimeout(checkReadiness, 50);
-    }
-    
-    // Called when browser is ready (or timeout reached)
-    onBrowserReady() {
-        try {
-            // Initialize browser security context if docShell is available
-            const browser = this.elements.webContent;
-            if (browser.docShell) {
-                browser.docShell.createAboutBlankContentViewer(
-                    Services.scriptSecurityManager.getSystemPrincipal(),
-                    Services.scriptSecurityManager.getSystemPrincipal()
-                );
-                console.log('[Little Zen Window] Browser security context initialized');
-            }
-            
-            // Set compositor ready flag
-            window._zenCompositorReady = true;
-            
-            // Dispatch ready event
-            window.dispatchEvent(new CustomEvent('ZenWindowReady', {
-                detail: { compositorReady: true }
-            }));
-            
-        } catch (error) {
-            console.warn('[Little Zen Window] Error in onBrowserReady:', error);
+    // Transfer live browser content to main window via swapDocShells (no reload)
+    // This mirrors how Zen's drag-and-drop moves tabs between windows.
+    async divertTabToSelectedWorkspaceViaSync() {
+        if (!this.mainWindow || !this.selectedWorkspaceId) {
+            console.warn('[Little Zen Window] Cannot divert - missing main window or workspace');
+            return this.divertTabToSelectedWorkspace();
         }
-    }
-    
-    // Enhanced divert method using Zen Window Sync infrastructure
-    divertTabToSelectedWorkspaceViaSync() {
+
+        const selectedWorkspace = this.gZenWorkspaces.getWorkspaceFromId(this.selectedWorkspaceId);
+        if (!selectedWorkspace) {
+            console.error('[Little Zen Window] Selected workspace not found:', this.selectedWorkspaceId);
+            return;
+        }
+
+        const ourBrowser = this.elements.webContent;
+        if (!ourBrowser) {
+            console.error('[Little Zen Window] No browser element found');
+            return;
+        }
+
+        console.log('[Little Zen Window] Starting live tab transfer via swapDocShells');
+
         try {
-            if (!this.mainWindow || !this.currentUrl || !this.selectedWorkspaceId) {
-                console.warn('[Little Zen Window] Cannot divert via sync - missing requirements');
-                return this.divertTabToSelectedWorkspace(); // Fallback to original method
-            }
-            
-            console.log('[Little Zen Window] Diverting tab via Zen Window Sync infrastructure');
-            
-            // Get the selected workspace
-            const selectedWorkspace = this.gZenWorkspaces.getWorkspaceFromId(this.selectedWorkspaceId);
-            if (!selectedWorkspace) {
-                console.error('[Little Zen Window] Selected workspace not found:', this.selectedWorkspaceId);
-                return;
-            }
-            
-            // Switch to the selected workspace first
-            this.gZenWorkspaces.changeWorkspace(selectedWorkspace).then(() => {
-                console.log('[Little Zen Window] Workspace switched, attempting tab adoption');
-                
-                try {
-                    // Get our mock tab with proper structure for adoption
-                    const mockTab = window.gBrowser.selectedTab;
-                    
-                    // Ensure the mock tab has all required properties for adoption
-                    if (!mockTab.ownerGlobal) {
-                        console.error('[Little Zen Window] Mock tab missing ownerGlobal');
-                        return this.divertTabToSelectedWorkspace();
-                    }
-                    
-                    if (!mockTab.linkedBrowser) {
-                        console.error('[Little Zen Window] Mock tab missing linkedBrowser');
-                        return this.divertTabToSelectedWorkspace();
-                    }
-                    
-                    // Set the workspace ID on the mock tab before adoption
-                    mockTab.setAttribute('zen-workspace-id', this.selectedWorkspaceId);
-                    
-                    // Set adoption flags to indicate we're performing a tab adoption
-                    window._isAdoptingFlag = true;
-                    window.gZenWorkspaces.currentWindowIsSyncing = true;
-                    
-                    // Ensure the browser has a permanentKey that the target window can track
-                    const browserElement = mockTab.linkedBrowser;
-                    if (browserElement && !browserElement.permanentKey) {
-                        browserElement.permanentKey = {
-                            id: 'little-zen-browser-' + Date.now(),
-                            created: Date.now(),
-                            adoptable: true
-                        };
-                    }
-                    
-                    console.log('[Little Zen Window] Attempting tab adoption with mock tab:', {
-                        tabId: mockTab.id,
-                        hasOwnerGlobal: !!mockTab.ownerGlobal,
-                        hasLinkedBrowser: !!mockTab.linkedBrowser,
-                        hasParentNode: !!mockTab.parentNode,
-                        workspaceId: this.selectedWorkspaceId,
-                        browserPermanentKey: typeof mockTab.linkedBrowser?.permanentKey,
-                        permanentKeyId: mockTab.linkedBrowser?.permanentKey?.id,
-                        isAdoptingTab: window.gBrowserInit.isAdoptingTab(),
-                        tPos: mockTab._tPos,
-                        closing: mockTab.closing,
-                        mOverCloseButton: mockTab.mOverCloseButton,
-                        remoteAttr: mockTab.getAttribute('remote'),
-                        draggableAttr: mockTab.getAttribute('draggable')
-                    });
-                    
-                    // Use adoptTab to physically move the browser content
-                    console.log('[Little Zen Window] Calling main window adoptTab...');
-                    
-                    // Validate that the main window has adoptTab method
-                    if (!this.mainWindow.gBrowser.adoptTab) {
-                        console.error('[Little Zen Window] Main window gBrowser missing adoptTab method');
-                        throw new Error('adoptTab method not available');
-                    }
-                    
-                    // Add detailed logging before adoption attempt
-                    console.log('[Little Zen Window] Pre-adoption state:', {
-                        mockTabValid: !!mockTab,
-                        mockTabId: mockTab?.id,
-                        mockTabOwnerGlobal: !!mockTab?.ownerGlobal,
-                        mockTabLinkedBrowser: !!mockTab?.linkedBrowser,
-                        mockTabParentNode: !!mockTab?.parentNode,
-                        mainWindowValid: !!this.mainWindow,
-                        mainWindowGBrowser: !!this.mainWindow?.gBrowser,
-                        mainWindowAdoptTab: typeof this.mainWindow?.gBrowser?.adoptTab,
-                        currentUrl: this.currentUrl,
-                        selectedWorkspaceId: this.selectedWorkspaceId
-                    });
-                    
-                    // Validate compatibility for swapBrowsersAndCloseOther
-                    const ourBrowser = mockTab.linkedBrowser;
-                    const mainWindowPrivate = this.mainWindow.PrivateBrowsingUtils?.isWindowPrivate(this.mainWindow) || false;
-                    const ourWindowPrivate = (window.PrivateBrowsingUtils?.isWindowPrivate(window)) || false;
-                    const mainWindowFission = this.mainWindow.gFissionBrowser || false;
-                    const ourWindowFission = window.gFissionBrowser || false;
-                    
-                    console.log('[Little Zen Window] Compatibility check:', {
-                        mainWindowPrivate,
-                        ourWindowPrivate,
-                        privateBrowsingMatch: mainWindowPrivate === ourWindowPrivate,
-                        mainWindowFission,
-                        ourWindowFission,
-                        fissionMatch: mainWindowFission === ourWindowFission,
-                        ourBrowserRemote: ourBrowser?.isRemoteBrowser,
-                        ourBrowserType: ourBrowser?.getAttribute?.('type'),
-                        ourBrowserRemoteType: ourBrowser?.remoteType
-                    });
-                    
-                    // Check for potential adoption blockers
-                    if (mainWindowPrivate !== ourWindowPrivate) {
-                        console.warn('[Little Zen Window] Private browsing mismatch - adoption will likely fail');
-                    }
-                    
-                    if (mainWindowFission !== ourWindowFission) {
-                        console.warn('[Little Zen Window] Fission mismatch - adoption will likely fail');
-                    }
-                    
-                    let adoptedTab;
-                    try {
-                        adoptedTab = this.mainWindow.gBrowser.adoptTab(mockTab, 0, false);
-                        console.log('[Little Zen Window] adoptTab call completed, result:', !!adoptedTab);
-                    } catch (adoptError) {
-                        console.error('[Little Zen Window] adoptTab call threw error:', adoptError);
-                        console.error('[Little Zen Window] adoptTab error stack:', adoptError.stack);
-                        throw adoptError;
-                    }
-                    
-                    if (adoptedTab) {
-                        console.log('[Little Zen Window] Tab adoption successful, adopted tab:', {
-                            id: adoptedTab.id,
-                            hasLinkedBrowser: !!adoptedTab.linkedBrowser,
-                            hasOwnerGlobal: !!adoptedTab.ownerGlobal
-                        });
-                        
-                        // Ensure the adopted tab has the correct workspace ID
-                        adoptedTab.setAttribute('zen-workspace-id', this.selectedWorkspaceId);
-                        
-                        // Focus the main window and adopted tab
-                        this.mainWindow.focus();
-                        this.mainWindow.gBrowser.selectedTab = adoptedTab;
-                        
-                        console.log('[Little Zen Window] Tab adopted successfully to workspace:', selectedWorkspace.name);
-                        
-                        // Reset adoption flags
-                        window._isAdoptingFlag = false;
-                        window.gZenWorkspaces.currentWindowIsSyncing = false;
-                        
-                        // Close this custom window after successful adoption
-                        setTimeout(() => {
-                            window.close();
-                        }, 50);
-                    } else {
-                        console.error('[Little Zen Window] Tab adoption failed - adoptTab returned null/undefined');
-                        console.error('[Little Zen Window] This usually means the tab could not be adopted due to incompatible state');
-                        console.error('[Little Zen Window] Common causes: private browsing mismatch, fission mismatch, or browser type incompatibility');
-                        
-                        // Reset adoption flags on failure
-                        window._isAdoptingFlag = false;
-                        window.gZenWorkspaces.currentWindowIsSyncing = false;
-                        
-                        // Use manual swapDocShells implementation
-                        this.performManualDocShellSwap(selectedWorkspace);
-                    }
-                    
-                } catch (adoptError) {
-                    console.error('[Little Zen Window] Error during tab adoption:', adoptError);
-                    console.error('[Little Zen Window] Adoption error stack:', adoptError.stack);
-                    
-                    // Reset adoption flags on error
-                    window._isAdoptingFlag = false;
-                    window.gZenWorkspaces.currentWindowIsSyncing = false;
-                    
-                    // Use manual docShell swap as fallback
-                    this.performManualDocShellSwap(selectedWorkspace);
-                }
-                
-            }).catch(error => {
-                console.error('[Little Zen Window] Error switching workspace for adoption:', error);
-                
-                // Reset adoption flags on error
-                window._isAdoptingFlag = false;
-                window.gZenWorkspaces.currentWindowIsSyncing = false;
-                
-                this.performManualDocShellSwap(selectedWorkspace); // Manual swap fallback
+            // Switch workspace first so the new tab lands in the right space
+            await this.gZenWorkspaces.changeWorkspace(selectedWorkspace);
+
+            // Create destination tab with about:blank — we need a real browser element
+            // but we do NOT want it to start loading the real URL (that would cause a
+            // reload). We swap the live docShell in before any navigation happens.
+            const destTab = this.mainWindow.gBrowser.addTab('about:blank', {
+                triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+                skipAnimation: true,
             });
-            
-        } catch (error) {
-            console.error('[Little Zen Window] Error in sync-based tab diversion:', error);
-            
-            // Reset adoption flags on error
-            window._isAdoptingFlag = false;
-            if (window.gZenWorkspaces) {
-                window.gZenWorkspaces.currentWindowIsSyncing = false;
-            }
-            
-            // Try to get the selected workspace for manual swap
-            const selectedWorkspace = this.gZenWorkspaces?.getWorkspaceFromId(this.selectedWorkspaceId);
-            if (selectedWorkspace) {
-                this.performManualDocShellSwap(selectedWorkspace); // Manual swap fallback
-            } else {
-                this.divertTabToSelectedWorkspaceEnhanced(); // Enhanced fallback
-            }
-        }
-    }
-    
-    // Enhanced fallback method for when tab adoption fails
-    divertTabToSelectedWorkspaceEnhanced() {
-        console.log('[Little Zen Window] Using enhanced fallback for tab diversion');
-        
-        try {
-            if (!this.mainWindow || !this.selectedWorkspaceId) {
-                console.error('[Little Zen Window] Enhanced fallback missing requirements');
-                return this.divertTabToSelectedWorkspace(); // Final fallback
-            }
-            
-            // Get the current URL from the browser element
-            let urlToTransfer = this.currentUrl;
-            const browser = this.elements.webContent;
-            
-            // Try to get the most current URL from the browser
-            if (browser?.currentURI?.spec && browser.currentURI.spec !== 'about:blank') {
-                urlToTransfer = browser.currentURI.spec;
-                console.log('[Little Zen Window] Using browser currentURI:', urlToTransfer);
-            } else if (browser?.documentURI?.spec && browser.documentURI.spec !== 'about:blank') {
-                urlToTransfer = browser.documentURI.spec;
-                console.log('[Little Zen Window] Using browser documentURI:', urlToTransfer);
-            }
-            
-            if (!urlToTransfer || urlToTransfer === 'about:blank') {
-                console.warn('[Little Zen Window] No valid URL to transfer, using about:newtab');
-                urlToTransfer = 'about:newtab';
-            }
-            
-            console.log('[Little Zen Window] Enhanced fallback transferring URL:', urlToTransfer);
-            
-            // Get the selected workspace
-            const selectedWorkspace = this.gZenWorkspaces.getWorkspaceFromId(this.selectedWorkspaceId);
-            if (!selectedWorkspace) {
-                console.error('[Little Zen Window] Selected workspace not found:', this.selectedWorkspaceId);
+
+            if (!destTab) {
+                console.error('[Little Zen Window] Failed to create destination tab');
                 return this.divertTabToSelectedWorkspace();
             }
-            
-            // Switch to the selected workspace first
-            this.gZenWorkspaces.changeWorkspace(selectedWorkspace).then(() => {
-                console.log('[Little Zen Window] Workspace switched for enhanced fallback');
-                
-                try {
-                    let newTab;
-                    
-                    // Try Zen-specific addWebTab first
-                    if (this.mainWindow.gBrowser.addWebTab) {
-                        console.log('[Little Zen Window] Using addWebTab for enhanced fallback');
-                        
-                        // Create a content principal for the URL instead of using system principal
-                        let principal;
-                        try {
-                            const uri = Services.io.newURI(urlToTransfer);
-                            principal = Services.scriptSecurityManager.createContentPrincipal(uri, {});
-                        } catch (e) {
-                            console.warn('[Little Zen Window] Could not create content principal, using null principal');
-                            principal = Services.scriptSecurityManager.createNullPrincipal({});
-                        }
-                        
-                        newTab = this.mainWindow.gBrowser.addWebTab(urlToTransfer, {
-                            workspaceId: this.selectedWorkspaceId,
-                            triggeringPrincipal: principal,
-                            userContextId: 0 // Default container
-                        });
-                    } else {
-                        console.log('[Little Zen Window] Using addTab for enhanced fallback');
-                        newTab = this.mainWindow.gBrowser.addTab(urlToTransfer, {
-                            triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal()
-                        });
-                        
-                        // Set workspace ID manually if addTab was used
-                        if (newTab) {
-                            newTab.setAttribute('zen-workspace-id', this.selectedWorkspaceId);
-                        }
-                    }
-                    
-                    if (newTab) {
-                        console.log('[Little Zen Window] Enhanced fallback tab created successfully');
-                        
-                        // Focus the main window and new tab
-                        this.mainWindow.focus();
-                        this.mainWindow.gBrowser.selectedTab = newTab;
-                        
-                        // Close this window after successful transfer
-                        setTimeout(() => {
-                            window.close();
-                        }, 100);
-                    } else {
-                        console.error('[Little Zen Window] Enhanced fallback failed to create tab');
-                        this.divertTabToSelectedWorkspace();
-                    }
-                    
-                } catch (tabCreationError) {
-                    console.error('[Little Zen Window] Error creating tab in enhanced fallback:', tabCreationError);
-                    this.divertTabToSelectedWorkspace();
-                }
-                
-            }).catch(workspaceError => {
-                console.error('[Little Zen Window] Error switching workspace in enhanced fallback:', workspaceError);
-                this.divertTabToSelectedWorkspace();
+
+            destTab.setAttribute('zen-workspace-id', this.selectedWorkspaceId);
+
+            const destBrowser = destTab.linkedBrowser;
+
+            // Wait for the destination browser frame to be attached (webNavigation available)
+            await new Promise((resolve) => {
+                let attempts = 0;
+                const check = () => {
+                    if (destBrowser.webNavigation || ++attempts >= 30) resolve();
+                    else setTimeout(check, 50);
+                };
+                check();
             });
-            
-        } catch (error) {
-            console.error('[Little Zen Window] Error in enhanced fallback:', error);
-            this.divertTabToSelectedWorkspaceEnhanced(); // Final fallback
-        }
-    }
-    
-    // Manual docShell swap implementation to bypass adoptTab limitations
-    async performManualDocShellSwap(selectedWorkspace) {
-        console.log('[Little Zen Window] Performing manual docShell swap');
-        
-        try {
-            const ourLittleZenBrowser = this.elements.webContent;
-            if (!ourLittleZenBrowser) {
-                console.error('[Little Zen Window] No Little Zen browser element found');
-                return this.divertTabToSelectedWorkspaceEnhanced();
-            }
-            
-            // Extract security context from current browser
-            let triggeringPrincipal = null;
-            let csp = null;
-            let currentURL = this.currentUrl;
-            
+
+            // Stop any pending navigation in the destination browser before swapping,
+            // so we don't end up with two concurrent loads after the swap.
+            try { destBrowser.stop(); } catch (e) { /* ok */ }
+
+            // swapDocShells atomically moves the live content — process, session
+            // history, scroll position, form state — from ourBrowser into destBrowser.
+            // This only works reliably when both browsers are in the same content
+            // process. With Fission, about:blank starts in the parent process while
+            // our https:// page is in a web content process, so we need to ensure
+            // the destination browser is in the right process first.
+            //
+            // We do this by calling updateBrowserRemoteness on the destination tab
+            // to move it into the same process type as our source browser.
             try {
-                if (ourLittleZenBrowser.contentPrincipal) {
-                    triggeringPrincipal = ourLittleZenBrowser.contentPrincipal;
-                    console.log('[Little Zen Window] Extracted contentPrincipal for security context');
-                }
-                
-                if (ourLittleZenBrowser.csp) {
-                    csp = ourLittleZenBrowser.csp;
-                    console.log('[Little Zen Window] Extracted CSP for security context');
-                }
-                
-                // Get the most current URL
-                if (ourLittleZenBrowser.currentURI?.spec && ourLittleZenBrowser.currentURI.spec !== 'about:blank') {
-                    currentURL = ourLittleZenBrowser.currentURI.spec;
-                    console.log('[Little Zen Window] Using current URI for swap:', currentURL);
-                }
-            } catch (e) {
-                console.warn('[Little Zen Window] Could not extract security context:', e);
-            }
-            
-            // Fallback to content principal for the URL if no content principal available
-            if (!triggeringPrincipal) {
-                try {
-                    const uri = Services.io.newURI(currentURL);
-                    triggeringPrincipal = Services.scriptSecurityManager.createContentPrincipal(uri, {});
-                    console.log('[Little Zen Window] Created content principal for URL');
-                } catch (e) {
-                    triggeringPrincipal = Services.scriptSecurityManager.getSystemPrincipal();
-                    console.log('[Little Zen Window] Using system principal as final fallback');
-                }
-            }
-            
-            // Step 1: Create a new real tab in the main window
-            let destinationTab;
-            try {
-                if (this.mainWindow.gBrowser.addWebTab) {
-                    // Use addWebTab if available (Zen-specific method)
-                    destinationTab = this.mainWindow.gBrowser.addWebTab(currentURL, {
-                        workspaceId: this.selectedWorkspaceId,
-                        triggeringPrincipal: triggeringPrincipal,
-                        csp: csp,
-                        userContextId: 0
+                const remoteType = ourBrowser.remoteType;
+                if (remoteType && destBrowser.remoteType !== remoteType) {
+                    await this.mainWindow.gBrowser.updateBrowserRemoteness(destBrowser, {
+                        remoteType,
                     });
-                    console.log('[Little Zen Window] Created destination tab with addWebTab');
-                } else {
-                    // Use standard addTab
-                    destinationTab = this.mainWindow.gBrowser.addTab(currentURL, {
-                        triggeringPrincipal: triggeringPrincipal,
-                        csp: csp
-                    });
-                    if (destinationTab) {
-                        destinationTab.setAttribute('zen-workspace-id', this.selectedWorkspaceId);
-                    }
-                    console.log('[Little Zen Window] Created destination tab with addTab');
                 }
-            } catch (tabCreationError) {
-                console.error('[Little Zen Window] Failed to create destination tab:', tabCreationError);
-                return this.divertTabToSelectedWorkspaceEnhanced();
-            }
-            
-            if (!destinationTab) {
-                console.error('[Little Zen Window] Destination tab creation returned null');
-                return this.divertTabToSelectedWorkspaceEnhanced();
-            }
-            
-            // Step 2: Get the linkedBrowser from the destination tab
-            const destinationBrowser = destinationTab.linkedBrowser;
-            if (!destinationBrowser) {
-                console.error('[Little Zen Window] Destination tab has no linkedBrowser');
-                return this.divertTabToSelectedWorkspaceEnhanced();
-            }
-            
-            console.log('[Little Zen Window] Destination browser ready for swap');
-            
-            // Wait for destination browser to be fully initialized before swap
-            const waitForDestinationReady = () => {
-                return new Promise((resolve, reject) => {
-                    let attempts = 0;
-                    const maxAttempts = 20;
-                    
-                    const checkReady = () => {
-                        attempts++;
-                        
-                        // Check if destination browser is ready for swap
-                        if (destinationBrowser.docShell && destinationBrowser.webNavigation) {
-                            console.log('[Little Zen Window] Destination browser ready after', attempts, 'attempts');
-                            resolve();
-                        } else if (attempts < maxAttempts) {
-                            setTimeout(checkReady, 100);
-                        } else {
-                            console.warn('[Little Zen Window] Destination browser readiness timeout, proceeding anyway');
-                            resolve(); // Proceed anyway
-                        }
-                    };
-                    
-                    checkReady();
-                });
-            };
-            
-            // Wait for destination to be ready, then perform swap
-            await waitForDestinationReady();
-            
-            // Step 3: Ensure both browsers are properly configured for swap
-            this.prepareForDocShellSwap(ourLittleZenBrowser, destinationBrowser);
-            
-            // Step 4: Perform the docShell swap
-            try {
-                console.log('[Little Zen Window] Performing docShell swap...');
-                destinationBrowser.swapDocShells(ourLittleZenBrowser);
-                console.log('[Little Zen Window] DocShell swap completed successfully');
-                
-                // Step 5: Update UI state in the main window
-                try {
-                    destinationBrowser.updateCommands();
-                    console.log('[Little Zen Window] Updated commands in destination browser');
-                } catch (e) {
-                    console.warn('[Little Zen Window] Could not update commands:', e);
-                }
-                
-                // Step 6: Focus the main window and new tab
-                this.mainWindow.focus();
-                this.mainWindow.gBrowser.selectedTab = destinationTab;
-                
-                console.log('[Little Zen Window] Manual docShell swap completed successfully');
-                
-                // Step 7: Clean up - close the Little Zen window
-                setTimeout(() => {
-                    console.log('[Little Zen Window] Closing Little Zen window after successful swap');
-                    window.close();
-                }, 100);
-                
-            } catch (swapError) {
-                console.error('[Little Zen Window] DocShell swap failed:', swapError);
-                console.error('[Little Zen Window] Swap error stack:', swapError.stack);
-                
-                // Clean up the destination tab we created
-                try {
-                    this.mainWindow.gBrowser.removeTab(destinationTab);
-                } catch (e) {
-                    console.warn('[Little Zen Window] Could not clean up destination tab:', e);
-                }
-                
-                // Fall back to enhanced method
-                return this.divertTabToSelectedWorkspaceEnhanced();
-            }
-            
-        } catch (error) {
-            console.error('[Little Zen Window] Error in manual docShell swap:', error);
-            console.error('[Little Zen Window] Manual swap error stack:', error.stack);
-            return this.divertTabToSelectedWorkspaceEnhanced();
-        }
-    }
-    
-    // Prepare browsers for docShell swap by ensuring remote state compatibility
-    prepareForDocShellSwap(ourBrowser, destinationBrowser) {
-        console.log('[Little Zen Window] Preparing browsers for docShell swap');
-        
-        try {
-            // Get destination browser's remote state
-            const destinationRemoteType = destinationBrowser.remoteType;
-            const destinationIsRemote = destinationBrowser.isRemoteBrowser;
-            
-            console.log('[Little Zen Window] Destination browser state:', {
-                remoteType: destinationRemoteType,
-                isRemoteBrowser: destinationIsRemote
-            });
-            
-            // Ensure our Little Zen browser matches the remote state
-            try {
-                // Set isRemoteBrowser to match destination
-                Object.defineProperty(ourBrowser, 'isRemoteBrowser', {
-                    get: () => destinationIsRemote,
-                    configurable: true
-                });
-                console.log('[Little Zen Window] Set isRemoteBrowser to:', destinationIsRemote);
             } catch (e) {
-                console.warn('[Little Zen Window] Could not set isRemoteBrowser:', e);
+                console.warn('[Little Zen Window] Could not update remoteness:', e);
             }
-            
+
+            destBrowser.swapDocShells(ourBrowser);
+
+            // Sync tab metadata from the transferred content
             try {
-                // Set remoteType to match destination
-                Object.defineProperty(ourBrowser, 'remoteType', {
-                    get: () => destinationRemoteType,
-                    configurable: true
-                });
-                console.log('[Little Zen Window] Set remoteType to:', destinationRemoteType);
-            } catch (e) {
-                console.warn('[Little Zen Window] Could not set remoteType:', e);
-            }
-            
-            // Ensure both browsers have the remote attribute set correctly
-            try {
-                if (destinationIsRemote) {
-                    ourBrowser.setAttribute('remote', 'true');
-                    destinationBrowser.setAttribute('remote', 'true');
-                } else {
-                    ourBrowser.removeAttribute('remote');
-                    destinationBrowser.removeAttribute('remote');
+                const title = destBrowser.contentTitle;
+                if (title) destTab.label = title;
+                if (this.mainWindow.gBrowser._tabAttrModified) {
+                    this.mainWindow.gBrowser._tabAttrModified(destTab, ['label']);
                 }
-                console.log('[Little Zen Window] Synchronized remote attributes');
-            } catch (e) {
-                console.warn('[Little Zen Window] Could not synchronize remote attributes:', e);
-            }
-            
-            // Log final state for verification
-            console.log('[Little Zen Window] Pre-swap browser states:', {
-                our: {
-                    isRemoteBrowser: ourBrowser.isRemoteBrowser,
-                    remoteType: ourBrowser.remoteType,
-                    remoteAttr: ourBrowser.getAttribute('remote')
-                },
-                destination: {
-                    isRemoteBrowser: destinationBrowser.isRemoteBrowser,
-                    remoteType: destinationBrowser.remoteType,
-                    remoteAttr: destinationBrowser.getAttribute('remote')
-                }
-            });
-            
-        } catch (error) {
-            console.error('[Little Zen Window] Error preparing browsers for swap:', error);
-            // Continue anyway - the swap might still work
+            } catch (e) { /* non-critical */ }
+
+            destTab.setAttribute('zen-workspace-id', this.selectedWorkspaceId);
+            try { this.mainWindow.gZenWorkspaces?.updateTabsContainers?.(); } catch (e) { /* ok */ }
+
+            this.mainWindow.gBrowser.selectedTab = destTab;
+            this.mainWindow.focus();
+
+            console.log('[Little Zen Window] swapDocShells succeeded, closing Little Zen window');
+            setTimeout(() => window.close(), 50);
+
+        } catch (err) {
+            console.error('[Little Zen Window] swapDocShells transfer failed:', err);
+            this.divertTabToSelectedWorkspace();
         }
     }
 }
 
 // Initialize when window loads
 window.addEventListener('load', () => {
-    console.log('[Little Zen Window] Window loaded, initializing...');
-    
-    // CRITICAL: Prevent CustomizableUI from trying to build widgets in this window
-    try {
-        if (typeof CustomizableUI !== 'undefined') {
-            // Override buildWidget to prevent it from running in our window
-            const originalBuildWidget = CustomizableUI.buildWidget;
-            if (originalBuildWidget) {
-                CustomizableUI.buildWidget = function(aWidgetData) {
-                    // Skip widget building for Little Zen Window
-                    if (window.document.documentElement.getAttribute('windowtype') === 'navigator:browser' && 
-                        window.document.getElementById('littleZenWindow')) {
-                        console.log('[Little Zen Window] Skipping CustomizableUI widget build for Little Zen Window');
-                        return null;
-                    }
-                    return originalBuildWidget.apply(this, arguments);
-                };
-            }
-            
-            // Also override buildWidgetNode
-            const originalBuildWidgetNode = CustomizableUI.buildWidgetNode;
-            if (originalBuildWidgetNode) {
-                CustomizableUI.buildWidgetNode = function(aWidgetData, aWindow) {
-                    // Skip widget node building for Little Zen Window
-                    if (aWindow === window) {
-                        console.log('[Little Zen Window] Skipping CustomizableUI widget node build for Little Zen Window');
-                        return null;
-                    }
-                    return originalBuildWidgetNode.apply(this, arguments);
-                };
-            }
-        }
-    } catch (e) {
-        console.warn('[Little Zen Window] Could not override CustomizableUI methods:', e);
-    }
-    
     window.zenWindow = new LittleZenWindow();
-    
-    // Additional browser initialization after window is fully loaded
-    setTimeout(() => {
-        const browser = document.getElementById('web-content');
-        if (browser && !browser.docShell) {
-            console.log('[Little Zen Window] Performing delayed browser initialization...');
-            
-            try {
-                // Try to force browser construction through various methods
-                
-                // Method 1: Check frameLoader and force construction
-                if (browser.frameLoader) {
-                    console.log('[Little Zen Window] Browser frameLoader available');
-                    try {
-                        // Try to access the remote tab through frameLoader
-                        const remoteTab = browser.frameLoader.remoteTab;
-                        if (remoteTab) {
-                            console.log('[Little Zen Window] Remote tab available through frameLoader');
-                        }
-                    } catch (e) {
-                        console.log('[Little Zen Window] Could not access remoteTab:', e);
-                    }
-                } else {
-                    console.log('[Little Zen Window] Browser frameLoader not available');
-                    
-                    // Try to force frameLoader creation
-                    try {
-                        browser.setAttribute('src', 'about:blank');
-                        browser.removeAttribute('src');
-                        console.log('[Little Zen Window] Attempted to force frameLoader creation');
-                    } catch (e) {
-                        console.log('[Little Zen Window] Could not force frameLoader creation:', e);
-                    }
-                }
-                
-                // Method 2: Try to access the docShell through different paths
-                if (browser.browsingContext?.docShell) {
-                    console.log('[Little Zen Window] DocShell available through browsingContext');
-                } else if (browser.webNavigation?.QueryInterface) {
-                    try {
-                        const docShell = browser.webNavigation.QueryInterface(Ci.nsIDocShell);
-                        if (docShell) {
-                            console.log('[Little Zen Window] DocShell available through webNavigation QI');
-                        }
-                    } catch (e) {
-                        console.log('[Little Zen Window] Could not QI webNavigation to docShell:', e);
-                    }
-                }
-                
-                // Method 3: Try to force a reflow to trigger construction
-                try {
-                    const rect = browser.getBoundingClientRect();
-                    console.log('[Little Zen Window] Forced reflow, browser rect:', rect.width, 'x', rect.height);
-                    
-                    // Force style computation
-                    const computedStyle = window.getComputedStyle(browser);
-                    console.log('[Little Zen Window] Browser display style:', computedStyle.display);
-                } catch (e) {
-                    console.log('[Little Zen Window] Could not force reflow:', e);
-                }
-                
-                // Method 4: Try to manually trigger browser construction
-                try {
-                    if (browser.construct && typeof browser.construct === 'function') {
-                        browser.construct();
-                        console.log('[Little Zen Window] Manual browser.construct() called');
-                    }
-                } catch (e) {
-                    console.log('[Little Zen Window] Manual construct() failed:', e);
-                }
-                
-                // Final check after all attempts
-                setTimeout(() => {
-                    console.log('[Little Zen Window] Final docShell status:', !!browser.docShell);
-                    if (browser.docShell) {
-                        console.log('[Little Zen Window] SUCCESS: DocShell finally available!');
-                    } else {
-                        console.warn('[Little Zen Window] DocShell still not available after all attempts');
-                        console.log('[Little Zen Window] Browser state:', {
-                            hasFrameLoader: !!browser.frameLoader,
-                            hasWebNavigation: !!browser.webNavigation,
-                            hasBrowsingContext: !!browser.browsingContext,
-                            type: browser.getAttribute('type'),
-                            remote: browser.getAttribute('remote'),
-                            src: browser.getAttribute('src')
-                        });
-                    }
-                }, 100);
-                
-            } catch (e) {
-                console.warn('[Little Zen Window] Error in delayed browser initialization:', e);
-            }
-        } else if (browser?.docShell) {
-            console.log('[Little Zen Window] DocShell already available in delayed check');
-        }
-    }, 200);
-    
-    // Check for URL parameter (for file:// URLs)
-    const urlParams = new URLSearchParams(window.location.search);
-    let initialUrl = urlParams.get('url');
-    console.log('[Little Zen Window] URL from search params:', initialUrl);
-    
-    // Check for window arguments (for chrome:// URLs)
-    if (!initialUrl && window.arguments && window.arguments.length > 0) {
-        console.log('[Little Zen Window] Checking window arguments, length:', window.arguments.length);
+
+    // Read initial URL from window arguments (chrome://) or search params (file://)
+    let initialUrl = new URLSearchParams(window.location.search).get('url');
+
+    if (!initialUrl && window.arguments?.length > 0) {
         try {
-            // Get URL from window arguments
             const urlArg = window.arguments[0];
-            console.log('[Little Zen Window] First argument:', urlArg, typeof urlArg);
-            
-            if (urlArg && urlArg.QueryInterface) {
-                // It's an nsISupportsString
+            if (urlArg?.QueryInterface) {
                 initialUrl = urlArg.QueryInterface(Components.interfaces.nsISupportsString).data;
-                console.log('[Little Zen Window] URL from nsISupportsString:', initialUrl);
             } else if (typeof urlArg === 'string') {
-                // It's a plain string
                 initialUrl = urlArg;
-                console.log('[Little Zen Window] URL from string:', initialUrl);
             }
         } catch (e) {
             console.warn('[Little Zen Window] Error reading window arguments:', e);
         }
-    } else {
-        console.log('[Little Zen Window] No window arguments found');
     }
-    
+
     if (initialUrl) {
-        console.log('[Little Zen Window] Loading initial URL:', initialUrl);
         window.zenWindow.loadUrl(decodeURIComponent(initialUrl));
-    } else {
-        console.log('[Little Zen Window] No initial URL found');
     }
 });

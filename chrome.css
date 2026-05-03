@@ -1,0 +1,86 @@
+/* Little-window chrome backported from zen-browser/desktop#13450. */
+
+:root[zen-little-window="true"] {
+  --zen-element-separation: 0.1px !important;
+}
+
+:root[zen-little-window="true"] #navigator-toolbox,
+:root[zen-little-window="true"] #zen-sidebar-splitter {
+  visibility: collapse !important;
+}
+
+:root[zen-little-window="true"][zen-has-empty-tab="true"] {
+  --zen-minimum-window-height: 40px;
+  min-width: unset !important;
+}
+
+:root[zen-little-window="true"][zen-has-empty-tab="true"] #zen-appcontent-wrapper {
+  visibility: hidden !important;
+}
+
+:root[zen-little-window="true"][zen-has-empty-tab="true"] #urlbar[breakout-extend] {
+  min-width: 100% !important;
+  left: 50% !important;
+  top: 0 !important;
+  transform: translate(10px, 0) !important;
+  visibility: visible !important;
+}
+
+:root[zen-little-window="true"][zen-has-empty-tab="true"] #urlbar[breakout-extend] .urlbar-background {
+  outline: none !important;
+}
+
+:root[zen-little-window="true"][zen-has-empty-tab="true"] #urlbar[breakout-extend] .urlbar-input-container {
+  -moz-window-dragging: drag;
+}
+
+:root[zen-little-window="true"][zen-has-empty-tab="true"] #urlbar[breakout-extend] .urlbar-input-box {
+  -moz-window-dragging: no-drag;
+}
+
+:root[zen-little-window="true"][zen-has-empty-tab="true"] #zen-sidebar-top-buttons {
+  visibility: collapse !important;
+}
+
+/* ── Space Picker ─────────────────────────────────────────────────────────── */
+
+#zen-little-window-space-picker {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  cursor: pointer;
+  max-width: 140px;
+  margin-inline: 4px;
+  transition: background 0.15s ease;
+}
+
+#zen-little-window-space-picker:hover {
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+
+#zen-little-window-space-picker-label {
+  font-size: 12px;
+  font-weight: 500;
+  opacity: 0.85;
+  cursor: pointer;
+  max-width: 110px;
+}
+
+#zen-little-window-space-picker-label:hover {
+  opacity: 1;
+  text-decoration: underline;
+}
+
+#zen-little-window-space-picker-arrow {
+  font-size: 10px;
+  opacity: 0.6;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+#zen-little-window-space-picker-arrow:hover {
+  opacity: 1;
+}
