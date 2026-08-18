@@ -31,6 +31,7 @@
     urlbar: "__littleZenUrlbarPatched",
     emptyState: "__littleZenEmptyStatePatched",
     autoClose: "__littleZenAutoCloseAttached",
+    doubleEscapeClose: "__littleZenDoubleEscapeCloseAttached",
     keyListener: "__littleZenKeyListenerAttached",
     window: "__littleZenBootstrapped",
   };
@@ -167,6 +168,14 @@
 
   function releaseLittleWindowPresentation(win, reason = "unknown") {
     if (!isBrowserWindow(win) || win.__littleZenPresentationReleased) {
+      return;
+    }
+
+    if (win.document?.documentElement?.hasAttribute("zen-little-window-loading")) {
+      win.__littleZenReleasePresentationAfterLoading = reason;
+      logLittleWindowState(win, "Deferred Little Zen presentation release while loading", {
+        reason,
+      });
       return;
     }
 
@@ -806,6 +815,11 @@
       root.removeAttribute("zen-little-window-loading");
       delete win.__littleZenStartLoadingVeil;
       delete win.__littleZenSuppressUrlbarFocus;
+      if (win.__littleZenReleasePresentationAfterLoading) {
+        const releaseReason = win.__littleZenReleasePresentationAfterLoading;
+        delete win.__littleZenReleasePresentationAfterLoading;
+        releaseLittleWindowPresentation(win, `loading-complete:${releaseReason}`);
+      }
     }
 
     logLittleWindowState(win, isLoading ? "Entered Little Zen loading veil" : "Left Little Zen loading veil", {
@@ -2971,6 +2985,48 @@
 
   // ── End Workspace Picker ─────────────────────────────────────────────────────
 
+  function attachDoubleEscapeClose(win) {
+    if (win[PATCH_FLAGS.doubleEscapeClose]) {
+      return;
+    }
+
+    let lastEscapeAt = 0;
+    const onKeyDown = event => {
+      if (!isLittleWindow(win) || event.defaultPrevented || event.key !== "Escape") {
+        return;
+      }
+
+      const now = win.performance?.now?.() ?? Date.now();
+      if (now - lastEscapeAt <= 520) {
+        event.preventDefault();
+        event.stopPropagation();
+        logLittleWindowState(win, "Closing Little Zen window after double Escape");
+        win.close();
+        return;
+      }
+
+      lastEscapeAt = now;
+      win.setTimeout(() => {
+        if ((win.performance?.now?.() ?? Date.now()) - lastEscapeAt >= 520) {
+          lastEscapeAt = 0;
+        }
+      }, 560);
+    };
+
+    win.addEventListener("keydown", onKeyDown, true);
+    win.addEventListener(
+      "unload",
+      () => {
+        try {
+          win.removeEventListener("keydown", onKeyDown, true);
+        } catch (error) {}
+      },
+      { once: true }
+    );
+    win[PATCH_FLAGS.doubleEscapeClose] = true;
+    log("Attached Little Zen double Escape close listener");
+  }
+
   function attachAutoClose(win) {
     if (win[PATCH_FLAGS.autoClose]) {
       return;
@@ -3103,6 +3159,7 @@
     attachEmptyTabStateTracking(win);
     attachTransparentBrowserPrefSync(win);
     attachLittleWindowCloseButtonGuard(win);
+    attachDoubleEscapeClose(win);
     syncLittleWindowTransparentBrowsers(win);
     ensureLittleWindowLoadingPulse(win);
     if (win.__littleZenStartLoadingVeil || win.__littleZenPendingURL) {
