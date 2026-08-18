@@ -905,7 +905,7 @@ class LittleZenWindow {
     }
     
     // Divert current tab to the selected workspace
-    divertTabToSelectedWorkspace() {
+    async divertTabToSelectedWorkspace() {
         try {
             if (!this.mainWindow || !this.currentUrl || !this.selectedWorkspaceId) {
                 console.warn('[Little Zen Window] Cannot divert - missing main window, URL, or selected workspace');
@@ -921,31 +921,20 @@ class LittleZenWindow {
                 return;
             }
             
-            // Switch to the workspace first, then create the tab
-            this.gZenWorkspaces.changeWorkspace(selectedWorkspace).then(() => {
-                // Create new tab in the now-active workspace
-                const newTab = this.mainWindow.gBrowser.addTab(this.currentUrl, {
-                    triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal()
-                });
-                
-                // Ensure the tab has the correct workspace ID
-                if (newTab) {
-                    newTab.setAttribute('zen-workspace-id', this.selectedWorkspaceId);
-                }
-                
-                // Focus the main window and new tab
-                this.mainWindow.focus();
-                this.mainWindow.gBrowser.selectedTab = newTab;
-                
-                console.log('[Little Zen Window] Tab diverted successfully to workspace:', selectedWorkspace.name);
-                
-                // Close this custom window
-                setTimeout(() => {
-                    window.close();
-                }, 100);
-            }).catch(error => {
-                console.error('[Little Zen Window] Error switching workspace:', error);
+            await this.gZenWorkspaces.changeWorkspace(selectedWorkspace);
+            const newTab = this.mainWindow.gBrowser.addTab(this.currentUrl, {
+                triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal()
             });
+            if (newTab) {
+                await this.placeTabInSelectedWorkspace(newTab);
+            }
+            this.mainWindow.focus();
+            
+            console.log('[Little Zen Window] Tab diverted successfully to workspace:', selectedWorkspace.name);
+            
+            setTimeout(() => {
+                window.close();
+            }, 100);
             
         } catch (error) {
             console.error('[Little Zen Window] Error diverting tab to selected workspace:', error);
@@ -961,6 +950,40 @@ class LittleZenWindow {
         // Dispatch ready event so anything waiting on ZenWindowReady can proceed
         window._zenCompositorReady = true;
         window.dispatchEvent(new CustomEvent('ZenWindowReady', { detail: { compositorReady: true } }));
+    }
+
+    async placeTabInSelectedWorkspace(tab) {
+        if (!this.mainWindow?.gBrowser || !this.gZenWorkspaces || !tab || !this.selectedWorkspaceId) {
+            return false;
+        }
+
+        try {
+            if (typeof this.gZenWorkspaces.moveTabToWorkspace === 'function') {
+                this.gZenWorkspaces.moveTabToWorkspace(tab, this.selectedWorkspaceId);
+            } else {
+                tab.setAttribute('zen-workspace-id', this.selectedWorkspaceId);
+            }
+
+            if (this.gZenWorkspaces.lastSelectedWorkspaceTabs) {
+                this.gZenWorkspaces.lastSelectedWorkspaceTabs[this.selectedWorkspaceId] = tab;
+            }
+
+            if (typeof this.gZenWorkspaces.changeWorkspaceWithID === 'function') {
+                await this.gZenWorkspaces.changeWorkspaceWithID(this.selectedWorkspaceId);
+            } else {
+                const workspace = this.gZenWorkspaces.getWorkspaceFromId(this.selectedWorkspaceId);
+                if (workspace) {
+                    await this.gZenWorkspaces.changeWorkspace(workspace);
+                }
+            }
+
+            this.mainWindow.gBrowser.selectedTab = tab;
+            this.mainWindow.gBrowser.selectedBrowser?.focus?.();
+            return true;
+        } catch (error) {
+            console.error('[Little Zen Window] Error placing tab in workspace:', error);
+            return false;
+        }
     }
     
     // Transfer live browser content to main window via swapDocShells (no reload)
@@ -1002,7 +1025,7 @@ class LittleZenWindow {
                 return this.divertTabToSelectedWorkspace();
             }
 
-            destTab.setAttribute('zen-workspace-id', this.selectedWorkspaceId);
+            await this.placeTabInSelectedWorkspace(destTab);
 
             const destBrowser = destTab.linkedBrowser;
 
@@ -1042,6 +1065,18 @@ class LittleZenWindow {
 
             destBrowser.swapDocShells(ourBrowser);
 
+            try {
+                ourBrowser.loadURI(Services.io.newURI('about:blank'), {
+                    triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+                });
+            } catch (e) {
+                try {
+                    ourBrowser.fixupAndLoadURIString('about:blank', {
+                        triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+                    });
+                } catch (_) { /* ok */ }
+            }
+
             // Sync tab metadata from the transferred content
             try {
                 const title = destBrowser.contentTitle;
@@ -1051,10 +1086,7 @@ class LittleZenWindow {
                 }
             } catch (e) { /* non-critical */ }
 
-            destTab.setAttribute('zen-workspace-id', this.selectedWorkspaceId);
-            try { this.mainWindow.gZenWorkspaces?.updateTabsContainers?.(); } catch (e) { /* ok */ }
-
-            this.mainWindow.gBrowser.selectedTab = destTab;
+            await this.placeTabInSelectedWorkspace(destTab);
             this.mainWindow.focus();
 
             console.log('[Little Zen Window] swapDocShells succeeded, closing Little Zen window');
