@@ -29,6 +29,7 @@
     verticalTabs: "__littleZenVerticalTabsPatched",
     zenUIManager: "__littleZenZenUIManagerPatched",
     urlbar: "__littleZenUrlbarPatched",
+    urlbarDisableGuard: "__littleZenUrlbarDisableGuardAttached",
     emptyState: "__littleZenEmptyStatePatched",
     autoClose: "__littleZenAutoCloseAttached",
     doubleEscapeClose: "__littleZenDoubleEscapeCloseAttached",
@@ -619,6 +620,113 @@
     urlbar[PATCH_FLAGS.urlbar] = true;
   }
 
+  function attachUrlbarDisableGuard(win) {
+    if (!isBrowserWindow(win) || win[PATCH_FLAGS.urlbarDisableGuard]) {
+      return;
+    }
+
+    const doc = win.document;
+    const urlbar = win.gURLBar;
+    const blockedEvents = [
+      "mousedown",
+      "mouseup",
+      "click",
+      "dblclick",
+      "focusin",
+      "beforeinput",
+      "input",
+    ];
+    const listeners = [];
+
+    const addListener = (target, type, listener) => {
+      if (!target?.addEventListener) {
+        return;
+      }
+      target.addEventListener(type, listener, true);
+      listeners.push([target, type, listener]);
+    };
+
+    const isUrlbarTarget = event => {
+      if (!urlbar || !event?.target) {
+        return false;
+      }
+      try {
+        return event.target === urlbar || urlbar.contains(event.target);
+      } catch (error) {
+        return false;
+      }
+    };
+
+    const blockUrlbarOpen = (event, reason) => {
+      if (!isLittleWindow(win)) {
+        return;
+      }
+
+      try {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+        event?.stopImmediatePropagation?.();
+      } catch (error) {}
+
+      closeLittleWindowUrlbar(win, reason);
+    };
+
+    const blockUrlbarTarget = event => {
+      if (isUrlbarTarget(event)) {
+        blockUrlbarOpen(event, `blocked-${event.type}`);
+      }
+    };
+
+    const blockOpenLocationCommand = event => {
+      blockUrlbarOpen(event, "blocked-open-location-command");
+    };
+
+    const blockOpenLocationKeys = event => {
+      if (!isLittleWindow(win) || event.defaultPrevented) {
+        return;
+      }
+
+      const key = event.key?.toLowerCase?.();
+      const usesAccel = AppConstants.platform === "macosx" ? event.metaKey : event.ctrlKey;
+      if (
+        (usesAccel && (key === "l" || key === "k")) ||
+        (event.altKey && key === "d") ||
+        event.key === "F6"
+      ) {
+        blockUrlbarOpen(event, `blocked-key-${event.key}`);
+      }
+    };
+
+    for (const type of blockedEvents) {
+      addListener(urlbar, type, blockUrlbarTarget);
+    }
+    addListener(doc.getElementById("Browser:OpenLocation"), "command", blockOpenLocationCommand);
+    addListener(win, "keydown", blockOpenLocationKeys);
+
+    try {
+      urlbar?.setAttribute("zen-little-urlbar-disabled", "true");
+    } catch (error) {}
+
+    win.addEventListener(
+      "unload",
+      () => {
+        for (const [target, type, listener] of listeners) {
+          try {
+            target.removeEventListener(type, listener, true);
+          } catch (error) {}
+        }
+        try {
+          urlbar?.removeAttribute("zen-little-urlbar-disabled");
+        } catch (error) {}
+      },
+      { once: true }
+    );
+
+    win[PATCH_FLAGS.urlbarDisableGuard] = true;
+    closeLittleWindowUrlbar(win, "urlbar-disable-guard-attached");
+    log("Attached Little Zen urlbar disable guard");
+  }
+
   function formatLittleZenUrlbarValue(value) {
     if (typeof value !== "string" || !value) {
       return value;
@@ -846,100 +954,16 @@
   }
 
   function verifyLittleWindowUrlbarPosition(win, reason = "unknown") {
-    if (
-      !isEmptyLittleWindow(win) ||
-      win.__littleZenSuppressUrlbarFocus ||
-      win.document?.documentElement?.hasAttribute("zen-little-window-loading")
-    ) {
-      return;
-    }
-
-    const urlbar = win.gURLBar;
-    if (!urlbar) {
-      return;
-    }
-
-    try {
-      win.document.documentElement.setAttribute("zen-no-padding", "true");
-      urlbar.setAttribute("zen-newtab", "true");
-      if (!urlbar.hasAttribute("breakout-extend") && !urlbar.view?.isOpen) {
-        urlbar.setAttribute("breakout-extend", "true");
-      }
-      refreshLittleWindowLayout(win);
-
-      win.requestAnimationFrame(() => {
-        if (!isEmptyLittleWindow(win) || win.closed) {
-          return;
-        }
-
-        const rect = urlbar.getBoundingClientRect();
-        if (rect.width > 120 && rect.height > 24) {
-          win.resizeTo(Math.ceil(rect.width), Math.ceil(Math.max(rect.height, 40)));
-          centerWindow(win);
-        }
-
-        logLittleWindowState(win, "Verified Little Zen urlbar position", {
-          reason,
-          left: Math.round(rect.left),
-          top: Math.round(rect.top),
-          width: Math.round(rect.width),
-          height: Math.round(rect.height),
-        });
-      });
-    } catch (error) {
-      log("Could not verify Little Zen urlbar position.", error);
-    }
+    closeLittleWindowUrlbar(win, `urlbar-position-disabled:${reason}`);
   }
 
   function scheduleLittleWindowUrlbarPositionCheck(win, reason = "unknown") {
-    if (!isEmptyLittleWindow(win) || win.__littleZenSuppressUrlbarFocus) {
-      return;
-    }
-
-    verifyLittleWindowUrlbarPosition(win, `${reason}:immediate`);
-    win.requestAnimationFrame(() => verifyLittleWindowUrlbarPosition(win, `${reason}:raf`));
-    win.setTimeout(() => verifyLittleWindowUrlbarPosition(win, `${reason}:timeout-100`), 100);
-    win.setTimeout(() => verifyLittleWindowUrlbarPosition(win, `${reason}:timeout-300`), 300);
+    closeLittleWindowUrlbar(win, `urlbar-position-check-disabled:${reason}`);
   }
 
   function openLittleWindowUrlbar(win) {
-    if (!isEmptyLittleWindow(win)) {
-      return false;
-    }
-
-    logLittleWindowState(win, "Opening Little Zen urlbar");
-
-    try {
-      const handled = win.gZenUIManager?.handleNewTab?.(false, false, "tab", true);
-      if (handled) {
-        logLittleWindowState(
-          win,
-          "Opened Little Zen urlbar via gZenUIManager.handleNewTab"
-        );
-        return true;
-      }
-    } catch (error) {
-      log("Little Zen gZenUIManager.handleNewTab failed.", error);
-    }
-
-    try {
-      const urlbar = win.gURLBar;
-      urlbar?.search?.("");
-      urlbar?.setAttribute("zen-newtab", "true");
-      win.document.getElementById("Browser:OpenLocation")?.doCommand();
-      urlbar?.focus();
-      urlbar?.select();
-      urlbar?.inputField?.focus();
-      logLittleWindowState(
-        win,
-        "Opened Little Zen urlbar via Browser:OpenLocation fallback"
-      );
-      scheduleLittleWindowUrlbarPositionCheck(win, "open-location-fallback");
-      return true;
-    } catch (error) {
-      log("Could not open the Little Zen urlbar.", error);
-    }
-
+    closeLittleWindowUrlbar(win, "open-urlbar-disabled");
+    logLittleWindowState(win, "Blocked Little Zen urlbar open");
     return false;
   }
 
@@ -1171,50 +1195,8 @@
   }
 
   function focusUrlbar(win) {
-    if (win.__littleZenSuppressUrlbarFocus) {
-      logLittleWindowState(win, "Skipping Little Zen urlbar focus while navigation is loading");
-      return;
-    }
-
-    if (!isEmptyLittleWindow(win)) {
-      return;
-    }
-
-    win.requestAnimationFrame(() => {
-      win.requestAnimationFrame(() => {
-        const urlbar = win.gURLBar;
-        if (!urlbar || !isEmptyLittleWindow(win) || win.__littleZenSuppressUrlbarFocus) {
-          return;
-        }
-
-        if (urlbar.hasAttribute("breakout-extend") || urlbar.view?.isOpen) {
-          try {
-            urlbar.focus();
-            urlbar.select();
-            urlbar.inputField?.focus();
-            logLittleWindowState(win, "Focused existing Little Zen urlbar breakout");
-          } catch (error) {
-            log("Could not focus the little window urlbar.", error);
-          }
-          return;
-        }
-
-        if (openLittleWindowUrlbar(win)) {
-          scheduleLittleWindowUrlbarPositionCheck(win, "focus-opened");
-          return;
-        }
-
-        try {
-          urlbar.focus();
-          urlbar.select();
-          urlbar.inputField?.focus();
-          scheduleLittleWindowUrlbarPositionCheck(win, "focus-fallback");
-          logLittleWindowState(win, "Focused Little Zen urlbar without breakout");
-        } catch (error) {
-          log("Could not focus the little window urlbar.", error);
-        }
-      });
-    });
+    closeLittleWindowUrlbar(win, "focus-urlbar-disabled");
+    logLittleWindowState(win, "Blocked Little Zen urlbar focus");
   }
 
   // ── Workspace Picker ────────────────────────────────────────────────────────
@@ -3038,17 +3020,15 @@
     const onOpened = () => {
       releaseLittleWindowPresentation(win, "floating-urlbar-opened");
       centerWindow(win);
+      closeLittleWindowUrlbar(win, "floating-urlbar-opened-disabled");
 
       try {
         win.focus();
-        urlbar?.focus();
-        urlbar?.inputField?.focus();
-        scheduleLittleWindowUrlbarPositionCheck(win, "floating-urlbar-opened");
       } catch (error) {
-        log("Could not focus the opened Little Zen urlbar.", error);
+        log("Could not focus the Little Zen window.", error);
       }
 
-      logLittleWindowState(win, "Little Zen floating urlbar opened");
+      logLittleWindowState(win, "Blocked Little Zen floating urlbar open");
     };
 
     const onUnload = () => {
@@ -3131,7 +3111,7 @@
     try {
       win.resizeTo(URLBAR_WIDTH, URLBAR_HEIGHT);
       win.focus();
-      scheduleLittleWindowUrlbarPositionCheck(win, "attach-auto-close");
+      closeLittleWindowUrlbar(win, "attach-auto-close-disabled");
     } catch (error) {
       log("Could not size the little window.", error);
     }
@@ -3156,6 +3136,7 @@
     patchVerticalTabsManager(win);
     patchZenUIManager(win);
     patchUrlbar(win);
+    attachUrlbarDisableGuard(win);
     attachEmptyTabStateTracking(win);
     attachTransparentBrowserPrefSync(win);
     attachLittleWindowCloseButtonGuard(win);
@@ -3172,8 +3153,7 @@
     if (win.__littleZenPendingURL) {
       schedulePendingNavigationFlush(win, "apply-mode");
     } else if (!win.__littleZenSuppressUrlbarFocus) {
-      focusUrlbar(win);
-      scheduleLittleWindowUrlbarPositionCheck(win, "apply-mode");
+      closeLittleWindowUrlbar(win, "apply-mode-urlbar-disabled");
     }
     ensureSpacePicker(win);
     logLittleWindowState(win, "Applied Little Zen mode");

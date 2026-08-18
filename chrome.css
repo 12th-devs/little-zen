@@ -280,6 +280,17 @@
   background: color-mix(in srgb, currentColor 8%, transparent) !important;
 }
 
+:root[zen-little-window="true"] #urlbar[zen-little-urlbar-disabled="true"],
+:root[zen-little-window="true"] #urlbar[zen-little-urlbar-disabled="true"] * {
+  pointer-events: none !important;
+  cursor: default !important;
+}
+
+:root[zen-little-window="true"] #urlbar[zen-little-urlbar-disabled="true"][breakout-extend],
+:root[zen-little-window="true"] #urlbar[zen-little-urlbar-disabled="true"][open] {
+  visibility: hidden !important;
+}
+
 :root[zen-little-window="true"]:not([zen-has-empty-tab="true"]) #zen-appcontent-wrapper {
   z-index: 3;
   margin: var(--blended-addressbar-frame-gap) !important;
