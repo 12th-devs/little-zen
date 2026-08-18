@@ -67,6 +67,30 @@
   -moz-window-dragging: drag;
 }
 
+:root[zen-little-window="true"][zen-little-window-loading="true"]::before {
+  content: "";
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 2147483645;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background:
+    radial-gradient(
+      circle,
+      color-mix(in srgb, currentColor 88%, transparent) 0 18%,
+      color-mix(in srgb, currentColor 18%, transparent) 20% 46%,
+      transparent 48%
+    );
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, currentColor 18%, transparent) inset,
+    0 0 28px color-mix(in srgb, var(--little-zen-page-outline, currentColor) 42%, transparent);
+  animation: little-zen-loading-pulse-centered 1.45s cubic-bezier(0.37, 0, 0.2, 1) infinite;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
 #zen-little-window-loading-pulse {
   position: relative;
   width: 42px;
@@ -82,7 +106,7 @@
   box-shadow:
     0 0 0 1px color-mix(in srgb, currentColor 18%, transparent) inset,
     0 0 28px color-mix(in srgb, var(--little-zen-page-outline, currentColor) 42%, transparent);
-  animation: little-zen-loading-pulse 1.15s ease-in-out infinite alternate;
+  animation: little-zen-loading-pulse 1.45s cubic-bezier(0.37, 0, 0.2, 1) infinite;
   -moz-window-dragging: no-drag;
 }
 
@@ -92,17 +116,63 @@
   inset: 8px;
   border-radius: inherit;
   border: 1px solid color-mix(in srgb, currentColor 34%, transparent);
+  animation: little-zen-loading-ring 1.45s cubic-bezier(0.37, 0, 0.2, 1) infinite;
 }
 
 @keyframes little-zen-loading-pulse {
-  from {
-    transform: scale(0.86);
-    opacity: 0.48;
+  0% {
+    transform: scale(0.84);
+    opacity: 0.42;
+    filter: saturate(0.92);
   }
 
-  to {
+  45% {
     transform: scale(1);
-    opacity: 0.95;
+    opacity: 0.94;
+    filter: saturate(1.08);
+  }
+
+  100% {
+    transform: scale(0.88);
+    opacity: 0.55;
+    filter: saturate(1);
+  }
+}
+
+@keyframes little-zen-loading-pulse-centered {
+  0% {
+    transform: translate(-50%, -50%) scale(0.84);
+    opacity: 0.42;
+    filter: saturate(0.92);
+  }
+
+  45% {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 0.94;
+    filter: saturate(1.08);
+  }
+
+  100% {
+    transform: translate(-50%, -50%) scale(0.88);
+    opacity: 0.55;
+    filter: saturate(1);
+  }
+}
+
+@keyframes little-zen-loading-ring {
+  0% {
+    transform: scale(0.82);
+    opacity: 0.34;
+  }
+
+  50% {
+    transform: scale(1.18);
+    opacity: 0.68;
+  }
+
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
   }
 }
 

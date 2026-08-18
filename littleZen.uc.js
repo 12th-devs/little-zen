@@ -427,6 +427,7 @@
       if (littleWindow) {
         littleWindow._zenStartupLittleWindow = true;
         littleWindow._zenStartupSyncFlag = "unsynced";
+        littleWindow.__littleZenStartLoadingVeil = !!options.url;
         littleWindow.__littleZenPresentationReleased = false;
         log("Opened Little Zen browser window", {
           startupSyncFlag: littleWindow._zenStartupSyncFlag,
@@ -442,6 +443,12 @@
             LITTLE_WINDOW_ATTR,
             "true"
           );
+          if (littleWindow.__littleZenStartLoadingVeil) {
+            littleWindow.document?.documentElement?.setAttribute(
+              "zen-little-window-loading",
+              "true"
+            );
+          }
         } catch (error) {
           log("Startup flag applied before DOM was ready.", error);
         }
@@ -765,6 +772,10 @@
     }
 
     const doc = win.document;
+    if (!doc.body) {
+      return null;
+    }
+
     let overlay = doc.getElementById("zen-little-window-loading-overlay");
     if (overlay) {
       return overlay;
@@ -789,10 +800,11 @@
 
     const root = win.document.documentElement;
     if (isLoading) {
-      ensureLittleWindowLoadingPulse(win);
       root.setAttribute("zen-little-window-loading", "true");
+      ensureLittleWindowLoadingPulse(win);
     } else {
       root.removeAttribute("zen-little-window-loading");
+      delete win.__littleZenStartLoadingVeil;
       delete win.__littleZenSuppressUrlbarFocus;
     }
 
@@ -3093,6 +3105,9 @@
     attachLittleWindowCloseButtonGuard(win);
     syncLittleWindowTransparentBrowsers(win);
     ensureLittleWindowLoadingPulse(win);
+    if (win.__littleZenStartLoadingVeil || win.__littleZenPendingURL) {
+      setLittleWindowLoading(win, true, "apply-mode-startup");
+    }
     syncEmptyTabState(win, "apply-mode");
     updateLittleZenBlendedTheme(win, "apply-mode");
     refreshLittleWindowLayout(win);
@@ -3265,6 +3280,7 @@
         zenLittleWindow: true,
         all: false,
         features: OPEN_FEATURES,
+        url,
       });
 
       if (littleWindow) {
