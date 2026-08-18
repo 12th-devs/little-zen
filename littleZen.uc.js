@@ -717,12 +717,22 @@
         }
       },
 
-      onStateChange(browser, _webProgress, _request, stateFlags) {
+      onStateChange(browser, webProgress, _request, stateFlags) {
         if (
           browser === win.gBrowser?.selectedBrowser &&
+          (webProgress?.isTopLevel ?? true) &&
           stateFlags & Ci.nsIWebProgressListener.STATE_STOP
         ) {
           scheduleThemeUpdate("state-stop");
+          const currentSpec = browser.currentURI?.spec ?? "";
+          if (
+            stateFlags & Ci.nsIWebProgressListener.STATE_IS_NETWORK &&
+            !win.__littleZenPendingURL &&
+            !isEmptyLittleWindow(win) &&
+            currentSpec !== "about:blank"
+          ) {
+            setLittleWindowLoading(win, false, "state-stop");
+          }
         }
       },
     };
@@ -747,6 +757,48 @@
     }
     win[PATCH_FLAGS.emptyState] = true;
     log("Attached Little Zen empty-tab state tracking");
+  }
+
+  function ensureLittleWindowLoadingPulse(win) {
+    if (!isBrowserWindow(win)) {
+      return null;
+    }
+
+    const doc = win.document;
+    let overlay = doc.getElementById("zen-little-window-loading-overlay");
+    if (overlay) {
+      return overlay;
+    }
+
+    overlay = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
+    overlay.id = "zen-little-window-loading-overlay";
+    overlay.setAttribute("aria-hidden", "true");
+
+    const pulse = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
+    pulse.id = "zen-little-window-loading-pulse";
+    overlay.appendChild(pulse);
+
+    (doc.body || doc.documentElement).appendChild(overlay);
+    return overlay;
+  }
+
+  function setLittleWindowLoading(win, isLoading, reason = "unknown") {
+    if (!isLittleWindow(win)) {
+      return;
+    }
+
+    const root = win.document.documentElement;
+    if (isLoading) {
+      ensureLittleWindowLoadingPulse(win);
+      root.setAttribute("zen-little-window-loading", "true");
+    } else {
+      root.removeAttribute("zen-little-window-loading");
+      delete win.__littleZenSuppressUrlbarFocus;
+    }
+
+    logLittleWindowState(win, isLoading ? "Entered Little Zen loading veil" : "Left Little Zen loading veil", {
+      reason,
+    });
   }
 
   function refreshLittleWindowLayout(win) {
@@ -858,6 +910,7 @@
 
     const pendingMeta = win.__littleZenPendingURLMeta ?? {};
     win.__littleZenSuppressUrlbarFocus = true;
+    setLittleWindowLoading(win, true, `flush:${reason}`);
     closeLittleWindowUrlbar(win, `flush:${reason}`);
     delete win.__littleZenPendingURL;
     delete win.__littleZenPendingURLMeta;
@@ -949,6 +1002,7 @@
           });
           win.__littleZenPendingURL = pendingUrl;
           win.__littleZenPendingURLMeta = pendingMeta;
+          setLittleWindowLoading(win, true, `retry:${reason}`);
           return false;
         }
       } else if (selectedTab && targetWorkspace?.uuid) {
@@ -998,6 +1052,7 @@
       log("Failed to load queued Little Zen URL", pendingUrl, error);
       win.__littleZenPendingURL = pendingUrl;
       win.__littleZenPendingURLMeta = pendingMeta;
+      setLittleWindowLoading(win, true, `error:${reason}`);
       return false;
     }
   }
@@ -2975,6 +3030,7 @@
     attachTransparentBrowserPrefSync(win);
     attachLittleWindowCloseButtonGuard(win);
     syncLittleWindowTransparentBrowsers(win);
+    ensureLittleWindowLoadingPulse(win);
     syncEmptyTabState(win, "apply-mode");
     updateLittleZenBlendedTheme(win, "apply-mode");
     refreshLittleWindowLayout(win);
@@ -3079,6 +3135,7 @@
       }
 
       win.__littleZenSuppressUrlbarFocus = true;
+      setLittleWindowLoading(win, true, "queue-navigation");
       closeLittleWindowUrlbar(win, "queue-navigation");
       win.__littleZenPendingURL = url;
       win.__littleZenRoutedURL = url;
