@@ -9,6 +9,11 @@ A Zen Browser chrome mod that backports and experiments with Little Zen windows:
 - Preserves live tabs when moving them back into the main Zen window.
 - Adds a native-feeling `Open in Space` control with searchable space selection.
 - Adapts the Little Zen frame, URL bar, page shadow, and transparent browser styling to the active page/theme.
+- Shows a compact stalled-load fallback if the blank loading state lasts too long.
+
+## Debugging
+
+Set `extensions.littleZen.debugRouting` to `true` in `about:config` to enable verbose space/container routing logs. The pref defaults to `false`.
 
 ## Install
 

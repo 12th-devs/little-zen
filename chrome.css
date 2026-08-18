@@ -91,6 +91,10 @@
   pointer-events: none;
 }
 
+:root[zen-little-window="true"][zen-little-window-load-stalled="true"]::before {
+  content: none;
+}
+
 #zen-little-window-loading-pulse {
   position: relative;
   width: 42px;
@@ -117,6 +121,57 @@
   border-radius: inherit;
   border: 1px solid color-mix(in srgb, currentColor 34%, transparent);
   animation: little-zen-loading-ring 1.45s cubic-bezier(0.37, 0, 0.2, 1) infinite;
+}
+
+#zen-little-window-load-fallback {
+  display: none;
+}
+
+:root[zen-little-window="true"][zen-little-window-load-stalled="true"] #zen-little-window-loading-overlay {
+  flex-direction: column;
+  gap: 14px;
+}
+
+:root[zen-little-window="true"][zen-little-window-load-stalled="true"] #zen-little-window-loading-pulse {
+  width: 34px;
+  height: 34px;
+  animation-duration: 1.75s;
+}
+
+:root[zen-little-window="true"][zen-little-window-load-stalled="true"] #zen-little-window-load-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: min(320px, calc(100vw - 48px));
+  color: var(--zen-tab-header-foreground, currentColor);
+  font: menu;
+  -moz-window-dragging: no-drag;
+}
+
+#zen-little-window-load-fallback-title {
+  opacity: 0.78;
+  font-size: 12px;
+}
+
+#zen-little-window-load-fallback-actions {
+  display: flex;
+  gap: 6px;
+}
+
+#zen-little-window-load-fallback-actions button {
+  appearance: none;
+  min-height: 26px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
+  border-radius: var(--toolbarbutton-border-radius, 4px);
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  color: inherit;
+  font: inherit;
+}
+
+#zen-little-window-load-fallback-actions button:hover {
+  background: color-mix(in srgb, currentColor 14%, transparent);
 }
 
 @keyframes little-zen-loading-pulse {
