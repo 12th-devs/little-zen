@@ -2,6 +2,7 @@
   "id": "little-zen",
   "name": "Little Zen",
   "description": "Runtime backport of Zen Browser's Little Zen window",
+  "image": "https://raw.githubusercontent.com/12th-devs/little-zen/main/assets/theme-image.png",
   "style": {
     "chrome": "chrome.css"
   },

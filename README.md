@@ -1,5 +1,7 @@
 # Little Zen
 
+![Little Zen theme preview](assets/theme-image.png)
+
 A Zen Browser chrome mod that backports and experiments with Little Zen windows: small floating browser windows that can open live tabs, route links through Zen spaces and containers, and move the loaded tab back into the selected space.
 
 ## Features
