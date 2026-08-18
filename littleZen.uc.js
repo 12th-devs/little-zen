@@ -3473,12 +3473,23 @@
         return;
       }
 
+      win._zenStartupLittleWindow = true;
+      try {
+        win.document?.documentElement?.setAttribute(LITTLE_WINDOW_ATTR, "true");
+        win.document?.documentElement?.setAttribute(
+          "zen-little-window-loading",
+          "true"
+        );
+      } catch (error) {
+        log("Could not mark Little Zen window before queueing navigation", error);
+      }
+
       win.__littleZenSuppressUrlbarFocus = true;
-      setLittleWindowLoading(win, true, "queue-navigation");
-      closeLittleWindowUrlbar(win, "queue-navigation");
       win.__littleZenPendingURL = url;
       win.__littleZenRoutedURL = url;
       win.__littleZenPendingURLMeta = meta;
+      setLittleWindowLoading(win, true, "queue-navigation");
+      closeLittleWindowUrlbar(win, "queue-navigation");
       routeLog("Queued Little Zen navigation", {
         url,
         source: meta.source ?? "unknown",
