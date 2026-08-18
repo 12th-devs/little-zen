@@ -819,6 +819,63 @@
     }
   }
 
+  function verifyLittleWindowUrlbarPosition(win, reason = "unknown") {
+    if (
+      !isEmptyLittleWindow(win) ||
+      win.__littleZenSuppressUrlbarFocus ||
+      win.document?.documentElement?.hasAttribute("zen-little-window-loading")
+    ) {
+      return;
+    }
+
+    const urlbar = win.gURLBar;
+    if (!urlbar) {
+      return;
+    }
+
+    try {
+      win.document.documentElement.setAttribute("zen-no-padding", "true");
+      urlbar.setAttribute("zen-newtab", "true");
+      if (!urlbar.hasAttribute("breakout-extend") && !urlbar.view?.isOpen) {
+        urlbar.setAttribute("breakout-extend", "true");
+      }
+      refreshLittleWindowLayout(win);
+
+      win.requestAnimationFrame(() => {
+        if (!isEmptyLittleWindow(win) || win.closed) {
+          return;
+        }
+
+        const rect = urlbar.getBoundingClientRect();
+        if (rect.width > 120 && rect.height > 24) {
+          win.resizeTo(Math.ceil(rect.width), Math.ceil(Math.max(rect.height, 40)));
+          centerWindow(win);
+        }
+
+        logLittleWindowState(win, "Verified Little Zen urlbar position", {
+          reason,
+          left: Math.round(rect.left),
+          top: Math.round(rect.top),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+        });
+      });
+    } catch (error) {
+      log("Could not verify Little Zen urlbar position.", error);
+    }
+  }
+
+  function scheduleLittleWindowUrlbarPositionCheck(win, reason = "unknown") {
+    if (!isEmptyLittleWindow(win) || win.__littleZenSuppressUrlbarFocus) {
+      return;
+    }
+
+    verifyLittleWindowUrlbarPosition(win, `${reason}:immediate`);
+    win.requestAnimationFrame(() => verifyLittleWindowUrlbarPosition(win, `${reason}:raf`));
+    win.setTimeout(() => verifyLittleWindowUrlbarPosition(win, `${reason}:timeout-100`), 100);
+    win.setTimeout(() => verifyLittleWindowUrlbarPosition(win, `${reason}:timeout-300`), 300);
+  }
+
   function openLittleWindowUrlbar(win) {
     if (!isEmptyLittleWindow(win)) {
       return false;
@@ -851,6 +908,7 @@
         win,
         "Opened Little Zen urlbar via Browser:OpenLocation fallback"
       );
+      scheduleLittleWindowUrlbarPositionCheck(win, "open-location-fallback");
       return true;
     } catch (error) {
       log("Could not open the Little Zen urlbar.", error);
@@ -1116,6 +1174,7 @@
         }
 
         if (openLittleWindowUrlbar(win)) {
+          scheduleLittleWindowUrlbarPositionCheck(win, "focus-opened");
           return;
         }
 
@@ -1123,6 +1182,7 @@
           urlbar.focus();
           urlbar.select();
           urlbar.inputField?.focus();
+          scheduleLittleWindowUrlbarPositionCheck(win, "focus-fallback");
           logLittleWindowState(win, "Focused Little Zen urlbar without breakout");
         } catch (error) {
           log("Could not focus the little window urlbar.", error);
@@ -2915,6 +2975,7 @@
         win.focus();
         urlbar?.focus();
         urlbar?.inputField?.focus();
+        scheduleLittleWindowUrlbarPositionCheck(win, "floating-urlbar-opened");
       } catch (error) {
         log("Could not focus the opened Little Zen urlbar.", error);
       }
@@ -3002,6 +3063,7 @@
     try {
       win.resizeTo(URLBAR_WIDTH, URLBAR_HEIGHT);
       win.focus();
+      scheduleLittleWindowUrlbarPositionCheck(win, "attach-auto-close");
     } catch (error) {
       log("Could not size the little window.", error);
     }
@@ -3039,6 +3101,7 @@
       schedulePendingNavigationFlush(win, "apply-mode");
     } else if (!win.__littleZenSuppressUrlbarFocus) {
       focusUrlbar(win);
+      scheduleLittleWindowUrlbarPositionCheck(win, "apply-mode");
     }
     ensureSpacePicker(win);
     logLittleWindowState(win, "Applied Little Zen mode");
