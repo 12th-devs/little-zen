@@ -16,6 +16,9 @@
   const OPEN_FEATURES =
     "titlebar,close,toolbar,location,personalbar=no,status,menubar=no," +
     `resizable,minimizable,scrollbars,width=${URLBAR_WIDTH},height=${URLBAR_HEIGHT},centerscreen`;
+  const LITTLE_ZEN_THEME_CACHE_LIMIT = 200;
+  const LITTLE_ZEN_THEME_MESSAGE_NAME = "little-zen:theme-response";
+  const LITTLE_ZEN_THEME_BRIDGE_TIMEOUT_MS = 250;
 
   const PATCH_FLAGS = {
     browserWindowTracker: "__littleZenBrowserWindowTrackerPatched",
@@ -31,6 +34,8 @@
     keyListener: "__littleZenKeyListenerAttached",
     window: "__littleZenBootstrapped",
   };
+  const littleZenThemeCache = new Map();
+  let littleZenThemeRequestSeq = 0;
 
   const { AppConstants } = ChromeUtils.importESModule(
     "resource://gre/modules/AppConstants.sys.mjs"
@@ -188,6 +193,13 @@
     cleanupLittleWindowLifecycle(win, `expand:${reason}`);
     if (!isBrowserWindow(win) || win.closed) {
       return;
+    }
+
+    try {
+      win.document.documentElement.removeAttribute("zen-no-padding");
+      updateLittleZenBlendedTheme(win, `expand:${reason}`);
+    } catch (error) {
+      log("Could not prepare Little Zen blended frame while expanding", error);
     }
 
     setWindowResizable(win, true);
@@ -584,7 +596,40 @@
       };
     }
 
+    urlbar._zenTrimURL = function (value) {
+      return formatLittleZenUrlbarValue(value);
+    };
+
     urlbar[PATCH_FLAGS.urlbar] = true;
+  }
+
+  function formatLittleZenUrlbarValue(value) {
+    if (typeof value !== "string" || !value) {
+      return value;
+    }
+    if (!Services.prefs.getBoolPref("browser.urlbar.trimURLs", false)) {
+      return value;
+    }
+
+    let formatted = value;
+    if (Services.prefs.getBoolPref("browser.urlbar.trimHttps", false)) {
+      formatted = formatted.replace(/^https:\/\//i, "");
+    }
+    formatted = formatted.replace(/^http:\/\//i, "");
+
+    try {
+      const uri = new URL(value);
+      if (
+        formatted.endsWith("/") &&
+        uri.pathname === "/" &&
+        !uri.search &&
+        !uri.hash
+      ) {
+        formatted = formatted.slice(0, -1);
+      }
+    } catch (error) {}
+
+    return formatted;
   }
 
   function syncEmptyTabState(win, reason = "unknown") {
@@ -619,6 +664,11 @@
 
     try {
       urlbar?.removeAttribute("zen-newtab");
+      urlbar?.removeAttribute("breakout-extend");
+      urlbar?.removeAttribute("open");
+      urlbar?.view?.close?.();
+      urlbar?.inputField?.blur?.();
+      urlbar?.blur?.();
     } catch (error) {
       log("Could not clear Little Zen zen-newtab attribute.", error);
     }
@@ -642,21 +692,59 @@
       return;
     }
 
+    const scheduleThemeUpdate = (reason) => {
+      updateLittleZenBlendedTheme(win, reason);
+      win.setTimeout(() => updateLittleZenBlendedTheme(win, `${reason}:settled`), 180);
+      win.setTimeout(() => updateLittleZenBlendedTheme(win, `${reason}:late`), 700);
+    };
+
     const sync = event => {
       if (!isLittleWindow(win)) {
         return;
       }
 
       syncEmptyTabState(win, event?.type ?? "manual");
+      scheduleThemeUpdate(event?.type ?? "manual");
       if (win.__littleZenPendingURL && win.gBrowserInit?.delayedStartupFinished) {
         flushPendingNavigation(win, `state-tracker:${event?.type ?? "manual"}`);
       }
+    };
+
+    const progressListener = {
+      onLocationChange(browser, _webProgress, _request, _locationURI) {
+        if (browser === win.gBrowser?.selectedBrowser) {
+          scheduleThemeUpdate("location-change");
+        }
+      },
+
+      onStateChange(browser, _webProgress, _request, stateFlags) {
+        if (
+          browser === win.gBrowser?.selectedBrowser &&
+          stateFlags & Ci.nsIWebProgressListener.STATE_STOP
+        ) {
+          scheduleThemeUpdate("state-stop");
+        }
+      },
     };
 
     win.addEventListener("TabAttrModified", sync, true);
     win.addEventListener("TabSelect", sync, true);
     win.addEventListener("TabOpen", sync, true);
     win.addEventListener("TabClose", sync, true);
+    try {
+      win.gBrowser?.addTabsProgressListener?.(progressListener);
+      win.addEventListener(
+        "unload",
+        () => {
+          try {
+            win.gBrowser?.removeTabsProgressListener?.(progressListener);
+          } catch (error) {}
+        },
+        { once: true }
+      );
+    } catch (error) {
+      log("Could not attach Little Zen theme progress listener", error);
+    }
     win[PATCH_FLAGS.emptyState] = true;
     log("Attached Little Zen empty-tab state tracking");
   }
@@ -664,7 +752,7 @@
   function refreshLittleWindowLayout(win) {
     const root = win.document.documentElement;
     root.setAttribute(LITTLE_WINDOW_ATTR, "true");
-    root.setAttribute("zen-no-padding", "true");
+    root.toggleAttribute("zen-no-padding", isEmptyLittleWindow(win));
 
     try {
       win.ZenThemeModifier?.updateElementSeparation?.();
@@ -719,6 +807,28 @@
     return false;
   }
 
+  function closeLittleWindowUrlbar(win, reason = "unknown") {
+    const urlbar = win?.gURLBar;
+    if (!urlbar) {
+      return;
+    }
+
+    try {
+      urlbar.view?.close?.();
+      urlbar.removeAttribute("zen-newtab");
+      urlbar.removeAttribute("breakout-extend");
+      urlbar.removeAttribute("open");
+      urlbar.inputField?.blur?.();
+      urlbar.blur?.();
+      win.gBrowser?.selectedBrowser?.focus?.();
+      logLittleWindowState(win, "Closed Little Zen urlbar for loaded navigation", {
+        reason,
+      });
+    } catch (error) {
+      log("Could not close Little Zen urlbar for loaded navigation.", error);
+    }
+  }
+
   function flushPendingNavigation(win, reason = "unknown") {
     if (!isBrowserWindow(win)) {
       return false;
@@ -737,7 +847,7 @@
       return false;
     }
 
-    const selectedBrowser = win.gBrowser?.selectedBrowser;
+    let selectedBrowser = win.gBrowser?.selectedBrowser;
     if (!selectedBrowser) {
       logLittleWindowState(win, "Little Zen pending URL waiting for selected browser", {
         reason,
@@ -747,6 +857,8 @@
     }
 
     const pendingMeta = win.__littleZenPendingURLMeta ?? {};
+    win.__littleZenSuppressUrlbarFocus = true;
+    closeLittleWindowUrlbar(win, `flush:${reason}`);
     delete win.__littleZenPendingURL;
     delete win.__littleZenPendingURLMeta;
 
@@ -762,17 +874,118 @@
       const principal =
         pendingMeta.triggeringPrincipal ||
         Services.scriptSecurityManager.getSystemPrincipal();
+      const mainWin = getMainBrowserWindow(win);
+      const routingDecision = mainWin
+        ? resolveLittleZenRoutingDecision(
+            win,
+            mainWin,
+            pendingUrl,
+            principal,
+            `flush:${reason}`
+          )
+        : null;
+      const targetWorkspace = routingDecision?.targetWorkspace ?? null;
+      const targetContainerId = routingDecision?.targetContainerId ?? 0;
+      const selectedTab = win.gBrowser?.selectedTab;
+      const currentContainerId = getTabContainerId(selectedTab);
+
+      log("Little Zen routing target: preparing tab container before load", {
+        url: pendingUrl,
+        reason,
+        targetWorkspaceId: targetWorkspace?.uuid ?? null,
+        targetWorkspaceName: targetWorkspace?.name ?? null,
+        targetContainerId,
+        currentContainerId,
+      });
+
+      let loadedByNewTab = false;
+      if (selectedTab && currentContainerId !== targetContainerId) {
+        const routedTabOptions = {
+          triggeringPrincipal: principal,
+          skipAnimation: true,
+          skipRoute: true,
+          inBackground: false,
+        };
+        if (targetContainerId) {
+          routedTabOptions.userContextId = targetContainerId;
+        }
+        const routedTab = win.gBrowser.addTab(pendingUrl, routedTabOptions);
+
+        if (routedTab?.linkedBrowser) {
+          loadedByNewTab = true;
+          syncLittleWindowTransparentBrowsers(win);
+          if (targetWorkspace?.uuid) {
+            routedTab.setAttribute("zen-workspace-id", targetWorkspace.uuid);
+          }
+          if (routingDecision?.hasZenDefaultUserContextId) {
+            routedTab.setAttribute("zenDefaultUserContextId", "true");
+          }
+          win.gBrowser.selectedTab = routedTab;
+          selectedBrowser = routedTab.linkedBrowser;
+          win.setTimeout(() => {
+            try {
+              if (
+                selectedTab !== routedTab &&
+                win.gBrowser.selectedTab === routedTab &&
+                routedTab.linkedBrowser &&
+                selectedTab?.parentNode &&
+                !selectedTab.closing &&
+                win.gBrowser.tabs.length > 1
+              ) {
+                win.gBrowser.removeTab(selectedTab, { animate: false });
+              }
+            } catch (error) {
+              log("Could not remove old Little Zen container placeholder tab", error);
+            }
+          }, 1000);
+          log("Little Zen routing target: opened routed URL in target container tab", {
+            targetContainerId,
+            targetWorkspaceId: targetWorkspace?.uuid ?? null,
+          });
+        } else {
+          log("Little Zen routing target: routed container tab creation failed", {
+            targetContainerId,
+            targetWorkspaceId: targetWorkspace?.uuid ?? null,
+          });
+          win.__littleZenPendingURL = pendingUrl;
+          win.__littleZenPendingURLMeta = pendingMeta;
+          return false;
+        }
+      } else if (selectedTab && targetWorkspace?.uuid) {
+        syncLittleWindowTransparentBrowsers(win);
+        selectedTab.setAttribute("zen-workspace-id", targetWorkspace.uuid);
+        if (routingDecision?.hasZenDefaultUserContextId) {
+          selectedTab.setAttribute("zenDefaultUserContextId", "true");
+        } else {
+          selectedTab.removeAttribute("zenDefaultUserContextId");
+        }
+      }
+
       const loadFlags =
         Ci.nsIWebNavigation.LOAD_FLAGS_ALLOW_THIRD_PARTY_FIXUP ??
         Ci.nsIWebNavigation.LOAD_FLAGS_NONE;
 
-      selectedBrowser.fixupAndLoadURIString(pendingUrl, {
-        triggeringPrincipal: principal,
-        loadFlags,
-      });
+      if (!loadedByNewTab) {
+        selectedBrowser.fixupAndLoadURIString(pendingUrl, {
+          triggeringPrincipal: principal,
+          loadFlags,
+        });
+      }
+
+      try {
+        win.__littleZenRefreshSpacePickerTarget?.();
+      } catch (error) {
+        log("Could not refresh Little Zen routed workspace after dispatch", error);
+      }
+      updateLittleZenBlendedTheme(win, `dispatch:${reason}`);
 
       win.setTimeout(() => {
         expandLittleWindow(win, `pending-navigation:${reason}`);
+        try {
+          win.__littleZenRefreshSpacePickerTarget?.();
+        } catch (error) {
+          log("Could not refresh Little Zen routed workspace after expand", error);
+        }
       }, 0);
 
       logLittleWindowState(win, "Queued Little Zen URL dispatched", {
@@ -819,6 +1032,11 @@
   }
 
   function focusUrlbar(win) {
+    if (win.__littleZenSuppressUrlbarFocus) {
+      logLittleWindowState(win, "Skipping Little Zen urlbar focus while navigation is loading");
+      return;
+    }
+
     if (!isEmptyLittleWindow(win)) {
       return;
     }
@@ -826,7 +1044,7 @@
     win.requestAnimationFrame(() => {
       win.requestAnimationFrame(() => {
         const urlbar = win.gURLBar;
-        if (!urlbar || !isEmptyLittleWindow(win)) {
+        if (!urlbar || !isEmptyLittleWindow(win) || win.__littleZenSuppressUrlbarFocus) {
           return;
         }
 
@@ -896,6 +1114,1070 @@
     }
   }
 
+  function getWorkspaceByRouteTarget(mainWin, routeTarget) {
+    if (!routeTarget || routeTarget === "most-recent-space") {
+      return null;
+    }
+
+    const directMatch = getWorkspaceById(mainWin, routeTarget);
+    if (directMatch) {
+      return directMatch;
+    }
+
+    const normalizedTarget = String(routeTarget).toLowerCase();
+    return (
+      getWorkspaces(mainWin).find((workspace) => {
+        return (
+          workspace?.uuid === routeTarget ||
+          workspace?.id === routeTarget ||
+          String(workspace?.name ?? "").toLowerCase() === normalizedTarget
+        );
+      }) ?? null
+    );
+  }
+
+  function getWorkspaceContainerId(workspace) {
+    const containerId = Number.parseInt(workspace?.containerTabId ?? 0, 10);
+    return Number.isFinite(containerId) ? containerId : 0;
+  }
+
+  function getTabContainerId(tab) {
+    const containerId = Number.parseInt(tab?.getAttribute("usercontextid") ?? 0, 10);
+    return Number.isFinite(containerId) ? containerId : 0;
+  }
+
+  function getOpenShortcutDisplay() {
+    return AppConstants.platform === "macosx" ? "⌘O" : "Ctrl+O";
+  }
+
+  function getWorkspaceDisplayIcon(workspace) {
+    if (workspace?.icon) {
+      return workspace.icon;
+    }
+
+    const name = String(workspace?.name ?? "Space");
+    try {
+      return new Intl.Segmenter().segment(name).containing(0).segment.toUpperCase();
+    } catch (error) {
+      return Array.from(name)[0]?.toUpperCase() ?? "S";
+    }
+  }
+
+  function isTransparentBrowserAllowed() {
+    try {
+      return Services.prefs.getBoolPref(
+        "browser.tabs.allow_transparent_browser",
+        false
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function syncLittleWindowTransparentBrowsers(win) {
+    if (!isLittleWindow(win)) {
+      return;
+    }
+
+    const enabled = isTransparentBrowserAllowed();
+    win.document.documentElement.toggleAttribute(
+      "zen-little-window-transparent-browser",
+      enabled
+    );
+
+    try {
+      for (const browser of win.gBrowser?.browsers ?? []) {
+        if (enabled) {
+          browser.setAttribute("transparent", "true");
+        } else {
+          browser.removeAttribute("transparent");
+        }
+      }
+    } catch (error) {
+      log("Could not sync Little Zen transparent browser attribute", error);
+    }
+  }
+
+  function attachTransparentBrowserPrefSync(win) {
+    if (win.__littleZenTransparentPrefSyncAttached) {
+      return;
+    }
+    win.__littleZenTransparentPrefSyncAttached = true;
+
+    const observer = () => syncLittleWindowTransparentBrowsers(win);
+    try {
+      Services.prefs.addObserver(
+        "browser.tabs.allow_transparent_browser",
+        observer
+      );
+      win.addEventListener(
+        "unload",
+        () => {
+          try {
+            Services.prefs.removeObserver(
+              "browser.tabs.allow_transparent_browser",
+              observer
+            );
+          } catch (error) {}
+        },
+        { once: true }
+      );
+    } catch (error) {
+      log("Could not attach Little Zen transparent browser pref observer", error);
+    }
+  }
+
+  function attachLittleWindowCloseButtonGuard(win) {
+    if (win.__littleZenCloseButtonGuardAttached) {
+      return;
+    }
+    win.__littleZenCloseButtonGuardAttached = true;
+
+    const isCloseButtonTarget = (target) =>
+      !!(
+        target?.classList?.contains("titlebar-close") ||
+        target?.closest?.(".titlebar-close")
+      );
+
+    const closeFromTitlebar = (event) => {
+      const closeButton =
+        event.composedPath?.().some(isCloseButtonTarget) ||
+        isCloseButtonTarget(event.target);
+      if (!closeButton || !isLittleWindow(win)) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      try {
+        win.close();
+      } catch (error) {
+        log("Little Zen titlebar close guard failed", error);
+      }
+    };
+
+    win.addEventListener("mousedown", closeFromTitlebar, true);
+    win.addEventListener("click", closeFromTitlebar, true);
+    win.addEventListener("command", closeFromTitlebar, true);
+    win.addEventListener(
+      "unload",
+      () => {
+        try {
+          win.removeEventListener("mousedown", closeFromTitlebar, true);
+          win.removeEventListener("click", closeFromTitlebar, true);
+          win.removeEventListener("command", closeFromTitlebar, true);
+        } catch (error) {}
+      },
+      { once: true }
+    );
+  }
+
+  function rgbaToCss(color) {
+    return `rgba(${color.r}, ${color.g}, ${color.b}, ${color.a.toFixed(3)})`;
+  }
+
+  function rgbToCss(color) {
+    return `rgb(${color.r}, ${color.g}, ${color.b})`;
+  }
+
+  function parseCssRgb(input) {
+    if (!input) {
+      return null;
+    }
+    const raw = String(input).trim();
+    const perceptual = raw.match(/^ok(?:lab|lch)\(\s*(\d+(?:\.\d+)?%?)/i);
+    if (perceptual) {
+      const channel = perceptual[1];
+      const lightness = channel.endsWith("%")
+        ? parseFloat(channel) / 100
+        : parseFloat(channel);
+      if (Number.isFinite(lightness)) {
+        const value = Math.max(0, Math.min(255, Math.round(lightness * 255)));
+        return { r: value, g: value, b: value };
+      }
+    }
+
+    const hex = raw.match(/^#([0-9a-f]{3,8})$/i);
+    if (hex) {
+      const value = hex[1];
+      const expand = (part) => part.length === 1 ? `${part}${part}` : part;
+      const r = parseInt(expand(value.length <= 4 ? value[0] : value.slice(0, 2)), 16);
+      const g = parseInt(expand(value.length <= 4 ? value[1] : value.slice(2, 4)), 16);
+      const b = parseInt(expand(value.length <= 4 ? value[2] : value.slice(4, 6)), 16);
+      return { r, g, b };
+    }
+
+    const rgb = raw.match(/^rgba?\(([^)]+)\)$/i);
+    if (!rgb) {
+      return null;
+    }
+    const parts = rgb[1].replace(/\s*\/\s*[\d.]+%?$/, "").split(/[,\s]+/).filter(Boolean);
+    if (parts.length < 3) {
+      return null;
+    }
+    const readChannel = (part) => {
+      const value = parseFloat(part);
+      const scaled = String(part).trim().endsWith("%") ? value * 2.55 : value;
+      return Math.max(0, Math.min(255, Math.round(scaled)));
+    };
+    return {
+      r: readChannel(parts[0]),
+      g: readChannel(parts[1]),
+      b: readChannel(parts[2]),
+    };
+  }
+
+  function getCssColorAlpha(value) {
+    const match = String(value || "").trim().match(/^[a-z-]+\(([^)]+)\)$/i);
+    if (!match) {
+      return null;
+    }
+
+    const body = match[1].trim();
+    let alpha = null;
+    if (body.includes("/")) {
+      alpha = body.slice(body.lastIndexOf("/") + 1).trim();
+    } else {
+      const parts = body.split(",");
+      if (parts.length === 4) {
+        alpha = parts[3].trim();
+      }
+    }
+    if (alpha === null) {
+      return null;
+    }
+
+    const amount = parseFloat(alpha);
+    if (!Number.isFinite(amount)) {
+      return null;
+    }
+    return alpha.endsWith("%") ? amount / 100 : amount;
+  }
+
+  function hasVisibleColor(input) {
+    if (!input) {
+      return false;
+    }
+    const value = String(input).trim().toLowerCase();
+    if (!value || value === "transparent") {
+      return false;
+    }
+    const alpha = getCssColorAlpha(value);
+    return alpha === null || alpha >= 0.08;
+  }
+
+  function extractCssColor(input) {
+    const value = String(input || "").trim();
+    if (!value || value === "none") {
+      return null;
+    }
+    const candidates = value.match(/[a-z-]+\([^)]*\)|#[0-9a-f]{3,8}\b/gi) || [];
+    return candidates.find(hasVisibleColor) || null;
+  }
+
+  function getStyleBackground(style) {
+    if (!style) {
+      return null;
+    }
+    if (hasVisibleColor(style.backgroundColor)) {
+      return style.backgroundColor;
+    }
+    return extractCssColor(style.backgroundImage);
+  }
+
+  function getRelativeLuminance(color) {
+    const toLinear = (channel) => {
+      const value = channel / 255;
+      return value <= 0.03928
+        ? value / 12.92
+        : Math.pow((value + 0.055) / 1.055, 2.4);
+    };
+    return (
+      0.2126 * toLinear(color.r) +
+      0.7152 * toLinear(color.g) +
+      0.0722 * toLinear(color.b)
+    );
+  }
+
+  function getContrastRatio(a, b) {
+    const light = Math.max(getRelativeLuminance(a), getRelativeLuminance(b));
+    const dark = Math.min(getRelativeLuminance(a), getRelativeLuminance(b));
+    return (light + 0.05) / (dark + 0.05);
+  }
+
+  function chooseForeground(color) {
+    return getRelativeLuminance(color) > 0.6
+      ? "rgba(11, 13, 16, 0.92)"
+      : "rgba(245, 247, 251, 0.96)";
+  }
+
+  function getReadableForeground(bg, candidates = []) {
+    const bgRgb = parseCssRgb(bg);
+    if (!bgRgb) {
+      return candidates.find(hasVisibleColor) || "currentColor";
+    }
+    return candidates.find((candidate) => {
+      const fgRgb = parseCssRgb(candidate);
+      if (!fgRgb) {
+        return false;
+      }
+      return getContrastRatio(bgRgb, fgRgb) >= 4.5;
+    }) || chooseForeground(bgRgb);
+  }
+
+  function getStableHeaderForeground(bgRgb, foreground) {
+    const fgRgb = parseCssRgb(foreground);
+    if (fgRgb && getContrastRatio(bgRgb, fgRgb) >= 4.5) {
+      return foreground;
+    }
+    return chooseForeground(bgRgb);
+  }
+
+  function getCurrentThemeColorScheme(win) {
+    const rootStyle = win.getComputedStyle(win.document.documentElement);
+    const colorScheme =
+      rootStyle.getPropertyValue("--toolbar-color-scheme") ||
+      rootStyle.colorScheme;
+    const normalizedScheme = String(colorScheme || "").trim().toLowerCase();
+    if (normalizedScheme === "light" || normalizedScheme === "dark") {
+      return normalizedScheme;
+    }
+    return win.document.documentElement.hasAttribute("zen-should-be-dark-mode") ? "dark" : "light";
+  }
+
+  function getNeutralHeaderShade(win, source = "unknown-page") {
+    const isLight = getCurrentThemeColorScheme(win) === "light";
+    return {
+      bg: isLight ? "rgba(255, 255, 255, 0.1)" : "rgba(0, 0, 0, 0.1)",
+      fg: isLight ? "rgba(11, 13, 16, 0.82)" : "rgba(245, 247, 251, 0.9)",
+      source,
+    };
+  }
+
+  function getThemeColorTheme(browser) {
+    const doc = browser?.contentDocument;
+    const view = doc?.defaultView;
+    if (!doc || !view) {
+      return null;
+    }
+
+    const metas = doc.querySelectorAll?.('meta[name="theme-color" i]') || [];
+    for (const meta of metas) {
+      const media = meta.getAttribute?.("media") || "";
+      if (media) {
+        try {
+          if (!view.matchMedia(media).matches) {
+            continue;
+          }
+        } catch (error) {}
+      }
+
+      const bg = meta.getAttribute?.("content") || "";
+      if (!hasVisibleColor(bg)) {
+        continue;
+      }
+
+      const rootStyle = doc.documentElement ? view.getComputedStyle(doc.documentElement) : null;
+      const bodyStyle = doc.body ? view.getComputedStyle(doc.body) : null;
+      const bgRgb = parseCssRgb(bg);
+      return {
+        bg,
+        fg: getReadableForeground(bg, [
+          bodyStyle?.color || null,
+          rootStyle?.color || null,
+          bgRgb ? chooseForeground(bgRgb) : null,
+        ]),
+        source: "theme-color",
+      };
+    }
+
+    return null;
+  }
+
+  function getDocumentCanvasTheme(browser) {
+    const doc = browser?.contentDocument;
+    const view = doc?.defaultView;
+    const root = doc?.documentElement;
+    if (!doc || !view || !root) {
+      return null;
+    }
+
+    const rootStyle = view.getComputedStyle(root);
+    const bodyStyle = doc.body ? view.getComputedStyle(doc.body) : null;
+    let canvasFg = "";
+    let probe = null;
+    try {
+      probe = doc.createElement("div");
+      probe.style.cssText =
+        "position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;pointer-events:none;background-color:Canvas;color:CanvasText;";
+      root.appendChild(probe);
+      canvasFg = view.getComputedStyle(probe).color;
+    } catch (error) {
+    } finally {
+      try {
+        probe?.remove?.();
+      } catch (error) {}
+    }
+
+    const bg = [
+      bodyStyle ? getStyleBackground(bodyStyle) : null,
+      getStyleBackground(rootStyle),
+    ].find(hasVisibleColor);
+    if (!bg) {
+      return null;
+    }
+
+    return {
+      bg,
+      fg: getReadableForeground(bg, [
+        bodyStyle?.color || null,
+        rootStyle?.color || null,
+        canvasFg || null,
+      ]),
+      source: "document-canvas",
+    };
+  }
+
+  function getThemeFromElement(view, element, source = "element", allowPageFallback = true) {
+    if (!view || !element) {
+      return null;
+    }
+
+    let fg = null;
+    let bg = null;
+    let current = element;
+    const doc = element.ownerDocument || null;
+
+    while (current) {
+      if (!allowPageFallback && (current === doc?.body || current === doc?.documentElement)) {
+        break;
+      }
+      const style = view.getComputedStyle(current);
+      if (!fg && hasVisibleColor(style.color)) {
+        fg = style.color;
+      }
+      const background = getStyleBackground(style);
+      if (!bg && hasVisibleColor(background)) {
+        bg = background;
+      }
+      if (bg && fg) {
+        break;
+      }
+      current = current.parentElement;
+    }
+
+    if (!hasVisibleColor(bg)) {
+      return null;
+    }
+
+    return {
+      bg,
+      fg: getReadableForeground(bg, [fg]),
+      source,
+    };
+  }
+
+  function getTopVisibleTheme(browser) {
+    const doc = browser?.contentDocument;
+    const view = doc?.defaultView;
+    if (!doc || !view) {
+      return null;
+    }
+
+    const width = view.innerWidth || doc.documentElement?.clientWidth || 0;
+    const height = view.innerHeight || doc.documentElement?.clientHeight || 0;
+    const xMid = Math.max(1, Math.floor((width || 2) / 2));
+    const xEnd = Math.max(1, (width || 2) - 2);
+    const yTop = Math.min(3, Math.max(0, (height || 4) - 1));
+    const yBand = Math.min(30, Math.max(0, (height || 31) - 1));
+    const points = [
+      [1, yTop],
+      [xMid, yTop],
+      [xEnd, yTop],
+      [1, yBand],
+      [xMid, yBand],
+    ];
+    let firstRendered = null;
+
+    const isRenderedElement = (candidate) => {
+      if (!candidate) {
+        return false;
+      }
+      const rect = candidate.getBoundingClientRect?.();
+      const style = view.getComputedStyle(candidate);
+      return (
+        rect?.width > 0 &&
+        rect?.height > 0 &&
+        style.visibility !== "hidden" &&
+        style.visibility !== "collapse" &&
+        style.display !== "none" &&
+        Number(style.opacity || 1) > 0.05
+      );
+    };
+
+    for (const [x, y] of points) {
+      const elements = doc.elementsFromPoint?.(x, y) || [];
+      for (const element of elements) {
+        if (!isRenderedElement(element)) {
+          continue;
+        }
+        firstRendered ||= element;
+        const background = getStyleBackground(view.getComputedStyle(element));
+        if (hasVisibleColor(background)) {
+          return getThemeFromElement(view, element, "top-visible", false);
+        }
+      }
+    }
+
+    return getThemeFromElement(
+      view,
+      firstRendered || doc.elementFromPoint?.(1, 3),
+      "top-visible",
+      false
+    );
+  }
+
+  function getChromeToolbarFallbackTheme(win) {
+    const doc = win.document;
+    const probe = doc.createElement("div");
+    probe.style.position = "fixed";
+    probe.style.pointerEvents = "none";
+    probe.style.opacity = "0";
+    probe.style.backgroundColor = "var(--zen-main-browser-background-toolbar)";
+    probe.style.color = "var(--toolbox-textcolor)";
+    doc.documentElement.appendChild(probe);
+    const probeStyle = win.getComputedStyle(probe);
+    const toolbarBg = probeStyle.backgroundColor;
+    const toolbarFg = probeStyle.color;
+    probe.remove();
+
+    const rootStyle = win.getComputedStyle(doc.documentElement);
+    const rootBg = rootStyle.backgroundColor;
+    const bg = [toolbarBg, rootBg, "Canvas"].find(hasVisibleColor) || "Canvas";
+    return {
+      bg,
+      fg: getReadableForeground(bg, [toolbarFg]),
+      source: "toolbar-fallback",
+    };
+  }
+
+  async function getContentTaskPageTheme(browser) {
+    if (!browser || typeof ContentTask === "undefined" || !ContentTask?.spawn) {
+      return null;
+    }
+
+    try {
+      return await ContentTask.spawn(browser, null, () => {
+        const parseCssRgb = (input) => {
+          if (!input) return null;
+          const raw = String(input).trim();
+          const hex = raw.match(/^#([0-9a-f]{3,8})$/i);
+          if (hex) {
+            const value = hex[1];
+            const expand = (part) => part.length === 1 ? `${part}${part}` : part;
+            return {
+              r: parseInt(expand(value.length <= 4 ? value[0] : value.slice(0, 2)), 16),
+              g: parseInt(expand(value.length <= 4 ? value[1] : value.slice(2, 4)), 16),
+              b: parseInt(expand(value.length <= 4 ? value[2] : value.slice(4, 6)), 16),
+            };
+          }
+          const rgb = raw.match(/^rgba?\(([^)]+)\)$/i);
+          if (!rgb) return null;
+          const parts = rgb[1].replace(/\s*\/\s*[\d.]+%?$/, "").split(/[,\s]+/).filter(Boolean);
+          if (parts.length < 3) return null;
+          const read = (part) => {
+            const value = parseFloat(part);
+            return Math.max(0, Math.min(255, Math.round(String(part).trim().endsWith("%") ? value * 2.55 : value)));
+          };
+          return { r: read(parts[0]), g: read(parts[1]), b: read(parts[2]) };
+        };
+        const luminance = (color) => {
+          const toLinear = (channel) => {
+            const value = channel / 255;
+            return value <= 0.03928 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+          };
+          return 0.2126 * toLinear(color.r) + 0.7152 * toLinear(color.g) + 0.0722 * toLinear(color.b);
+        };
+        const alpha = (value) => {
+          const match = String(value || "").trim().match(/^[a-z-]+\(([^)]+)\)$/i);
+          if (!match) return null;
+          const body = match[1].trim();
+          const raw = body.includes("/") ? body.slice(body.lastIndexOf("/") + 1).trim() : body.split(",")[3]?.trim();
+          if (!raw) return null;
+          const amount = parseFloat(raw);
+          return Number.isFinite(amount) ? (raw.endsWith("%") ? amount / 100 : amount) : null;
+        };
+        const visible = (input) => {
+          const value = String(input || "").trim().toLowerCase();
+          if (!value || value === "transparent") return false;
+          const a = alpha(value);
+          return a === null || a >= 0.08;
+        };
+        const extractColor = (input) =>
+          (String(input || "").match(/[a-z-]+\([^)]*\)|#[0-9a-f]{3,8}\b/gi) || []).find(visible) || null;
+        const styleBackground = (style) => visible(style?.backgroundColor) ? style.backgroundColor : extractColor(style?.backgroundImage);
+        const chooseFg = (bg) => {
+          const rgb = parseCssRgb(bg);
+          return rgb && luminance(rgb) > 0.6 ? "rgba(11, 13, 16, 0.92)" : "rgba(245, 247, 251, 0.96)";
+        };
+        const readableFg = (bg, candidates = []) =>
+          candidates.find((candidate) => {
+            if (!visible(candidate)) return false;
+            const bgRgb = parseCssRgb(bg);
+            const fgRgb = parseCssRgb(candidate);
+            if (!bgRgb || !fgRgb) return false;
+            const light = Math.max(luminance(bgRgb), luminance(fgRgb));
+            const dark = Math.min(luminance(bgRgb), luminance(fgRgb));
+            return (light + 0.05) / (dark + 0.05) >= 3;
+          }) || chooseFg(bg);
+        const themeFromElement = (view, element, source, allowPageFallback = true) => {
+          if (!view || !element) return null;
+          let fg = null;
+          let bg = null;
+          let current = element;
+          const doc = element.ownerDocument;
+          while (current) {
+            if (!allowPageFallback && (current === doc.body || current === doc.documentElement)) break;
+            const style = view.getComputedStyle(current);
+            if (!fg && visible(style.color)) fg = style.color;
+            const background = styleBackground(style);
+            if (!bg && visible(background)) bg = background;
+            if (bg && fg) break;
+            current = current.parentElement;
+          }
+          return visible(bg) ? { bg, fg: readableFg(bg, [fg]), source } : null;
+        };
+        const themeColorTheme = (doc, view) => {
+          for (const meta of doc.querySelectorAll?.('meta[name="theme-color" i]') || []) {
+            const media = meta.getAttribute?.("media") || "";
+            try {
+              if (media && !view.matchMedia(media).matches) continue;
+            } catch {}
+            const bg = meta.getAttribute?.("content") || "";
+            if (!visible(bg)) continue;
+            const rootStyle = doc.documentElement ? view.getComputedStyle(doc.documentElement) : null;
+            const bodyStyle = doc.body ? view.getComputedStyle(doc.body) : null;
+            return {
+              bg,
+              fg: readableFg(bg, [bodyStyle?.color || null, rootStyle?.color || null]),
+              source: "theme-color",
+            };
+          }
+          return null;
+        };
+        const topVisibleTheme = (doc, view) => {
+          const width = view.innerWidth || doc.documentElement?.clientWidth || 0;
+          const height = view.innerHeight || doc.documentElement?.clientHeight || 0;
+          const xMid = Math.max(1, Math.floor((width || 2) / 2));
+          const xEnd = Math.max(1, (width || 2) - 2);
+          const yTop = Math.min(3, Math.max(0, (height || 4) - 1));
+          const yBand = Math.min(30, Math.max(0, (height || 31) - 1));
+          const points = [[1, yTop], [xMid, yTop], [xEnd, yTop], [1, yBand], [xMid, yBand]];
+          let firstRendered = null;
+          const isRendered = (candidate) => {
+            if (!candidate) return false;
+            const rect = candidate.getBoundingClientRect?.();
+            const style = view.getComputedStyle(candidate);
+            return rect?.width > 0 && rect?.height > 0 && style.visibility !== "hidden" && style.visibility !== "collapse" && style.display !== "none" && Number(style.opacity || 1) > 0.05;
+          };
+          for (const [x, y] of points) {
+            for (const element of doc.elementsFromPoint?.(x, y) || []) {
+              if (!isRendered(element)) continue;
+              firstRendered ||= element;
+              const background = styleBackground(view.getComputedStyle(element));
+              if (visible(background)) return themeFromElement(view, element, "top-visible", false);
+            }
+          }
+          return themeFromElement(view, firstRendered || doc.elementFromPoint?.(1, 3), "top-visible", false);
+        };
+        const canvasTheme = (doc, view) => {
+          const root = doc.documentElement;
+          const rootStyle = view.getComputedStyle(root);
+          const bodyStyle = doc.body ? view.getComputedStyle(doc.body) : null;
+          const bg = [bodyStyle ? styleBackground(bodyStyle) : null, styleBackground(rootStyle)].find(visible);
+          return visible(bg)
+            ? { bg, fg: readableFg(bg, [bodyStyle?.color || null, rootStyle?.color || null]), source: "document-canvas" }
+            : null;
+        };
+
+        try {
+          const doc = content.document;
+          const view = doc?.defaultView;
+          if (!doc || !view || !doc.documentElement) return null;
+          const href = content.location.href;
+          const theme =
+            topVisibleTheme(doc, view) ||
+            themeColorTheme(doc, view) ||
+            themeFromElement(view, doc.body, "body") ||
+            themeFromElement(view, doc.documentElement, "html") ||
+            canvasTheme(doc, view);
+          return theme ? { ...theme, href, bridge: "content" } : null;
+        } catch {
+          return null;
+        }
+      });
+    } catch (error) {
+      log("Little Zen ContentTask theme lookup failed", error);
+      return null;
+    }
+  }
+
+  function getLittleZenBrowserMessageManager(browser) {
+    return browser?.messageManager || browser?.frameLoader?.messageManager || null;
+  }
+
+  function getLittleZenThemeFrameScript(requestId) {
+    return `
+      (() => {
+        const requestId = ${JSON.stringify(requestId)};
+        const messageName = ${JSON.stringify(LITTLE_ZEN_THEME_MESSAGE_NAME)};
+        const send = (payload) => sendAsyncMessage(messageName, { requestId, ...payload });
+        const alpha = value => {
+          const match = String(value || "").trim().match(/^[a-z-]+\\(([^)]+)\\)$/i);
+          if (!match) return null;
+          const body = match[1].trim();
+          const raw = body.includes("/") ? body.slice(body.lastIndexOf("/") + 1).trim() : body.split(",")[3]?.trim();
+          if (!raw) return null;
+          const amount = parseFloat(raw);
+          return Number.isFinite(amount) ? (raw.endsWith("%") ? amount / 100 : amount) : null;
+        };
+        const visible = input => {
+          const value = String(input || "").trim().toLowerCase();
+          if (!value || value === "transparent") return false;
+          const a = alpha(value);
+          return a === null || a >= 0.08;
+        };
+        const extractColor = input =>
+          (String(input || "").match(/[a-z-]+\\([^)]*\\)|#[0-9a-f]{3,8}\\b/gi) || []).find(visible) || null;
+        const styleBackground = style => visible(style?.backgroundColor) ? style.backgroundColor : extractColor(style?.backgroundImage);
+        const parseRgb = input => {
+          const raw = String(input || "").trim();
+          const rgb = raw.match(/^rgba?\\(([^)]+)\\)$/i);
+          if (!rgb) return null;
+          const parts = rgb[1].replace(/\\s*\\/\\s*[\\d.]+%?$/, "").split(/[,\\s]+/).filter(Boolean);
+          if (parts.length < 3) return null;
+          const read = part => {
+            const value = parseFloat(part);
+            return Math.max(0, Math.min(255, Math.round(String(part).trim().endsWith("%") ? value * 2.55 : value)));
+          };
+          return { r: read(parts[0]), g: read(parts[1]), b: read(parts[2]) };
+        };
+        const luminance = color => {
+          const lin = channel => {
+            const value = channel / 255;
+            return value <= 0.03928 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+          };
+          return 0.2126 * lin(color.r) + 0.7152 * lin(color.g) + 0.0722 * lin(color.b);
+        };
+        const chooseFg = bg => {
+          const rgb = parseRgb(bg);
+          return rgb && luminance(rgb) > 0.6 ? "rgba(11, 13, 16, 0.92)" : "rgba(245, 247, 251, 0.96)";
+        };
+        const themeFromElement = (view, element, source, allowPageFallback = true) => {
+          if (!view || !element) return null;
+          let bg = null;
+          let fg = null;
+          let current = element;
+          const doc = element.ownerDocument;
+          while (current) {
+            if (!allowPageFallback && (current === doc.body || current === doc.documentElement)) break;
+            const style = view.getComputedStyle(current);
+            if (!fg && visible(style.color)) fg = style.color;
+            const background = styleBackground(style);
+            if (!bg && visible(background)) bg = background;
+            if (bg && fg) break;
+            current = current.parentElement;
+          }
+          return visible(bg) ? { bg, fg: fg || chooseFg(bg), source } : null;
+        };
+        const topVisibleTheme = (doc, view) => {
+          const width = view.innerWidth || doc.documentElement?.clientWidth || 0;
+          const height = view.innerHeight || doc.documentElement?.clientHeight || 0;
+          const xMid = Math.max(1, Math.floor((width || 2) / 2));
+          const xEnd = Math.max(1, (width || 2) - 2);
+          const yTop = Math.min(3, Math.max(0, (height || 4) - 1));
+          const yBand = Math.min(30, Math.max(0, (height || 31) - 1));
+          const points = [[1, yTop], [xMid, yTop], [xEnd, yTop], [1, yBand], [xMid, yBand]];
+          let firstRendered = null;
+          for (const [x, y] of points) {
+            for (const element of doc.elementsFromPoint?.(x, y) || []) {
+              if (!element) continue;
+              const rect = element.getBoundingClientRect?.();
+              const style = view.getComputedStyle(element);
+              if (!(rect?.width > 0 && rect?.height > 0) || style.visibility === "hidden" || style.visibility === "collapse" || style.display === "none" || Number(style.opacity || 1) <= 0.05) continue;
+              firstRendered ||= element;
+              if (visible(styleBackground(style))) return themeFromElement(view, element, "top-visible", false);
+            }
+          }
+          return themeFromElement(view, firstRendered || doc.elementFromPoint?.(1, 3), "top-visible", false);
+        };
+        const themeColorTheme = (doc, view) => {
+          for (const meta of doc.querySelectorAll?.('meta[name="theme-color" i]') || []) {
+            const media = meta.getAttribute?.("media") || "";
+            try { if (media && !view.matchMedia(media).matches) continue; } catch {}
+            const bg = meta.getAttribute?.("content") || "";
+            if (visible(bg)) return { bg, fg: chooseFg(bg), source: "theme-color" };
+          }
+          return null;
+        };
+        try {
+          if (content.top !== content) return;
+          const doc = content.document;
+          const view = doc?.defaultView;
+          if (!doc || !view || !doc.documentElement) return send({ ok: false });
+          const theme =
+            topVisibleTheme(doc, view) ||
+            themeColorTheme(doc, view) ||
+            themeFromElement(view, doc.body, "body") ||
+            themeFromElement(view, doc.documentElement, "html");
+          send({ ok: true, theme: theme ? { ...theme, href: content.location.href, bridge: "message-manager" } : null });
+        } catch (error) {
+          send({ ok: false, error: error?.message || String(error) });
+        }
+      })();
+    `;
+  }
+
+  async function getMessageManagerPageTheme(browser) {
+    const messageManager = getLittleZenBrowserMessageManager(browser);
+    if (!browser || !messageManager?.loadFrameScript || !messageManager?.addMessageListener) {
+      return null;
+    }
+
+    const requestId = `little-zen-theme-${Date.now()}-${++littleZenThemeRequestSeq}`;
+    return await new Promise((resolve) => {
+      let settled = false;
+      let timeoutId = 0;
+      const finish = (theme) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeoutId);
+        try {
+          messageManager.removeMessageListener(LITTLE_ZEN_THEME_MESSAGE_NAME, listener);
+        } catch (error) {}
+        resolve(theme || null);
+      };
+      const listener = {
+        receiveMessage(message) {
+          const data = message?.data;
+          if (!data || data.requestId !== requestId) {
+            return;
+          }
+          finish(data.theme || null);
+        },
+      };
+
+      const ownerWindow = browser.ownerGlobal || window;
+      timeoutId = ownerWindow.setTimeout(
+        () => finish(null),
+        LITTLE_ZEN_THEME_BRIDGE_TIMEOUT_MS
+      );
+      try {
+        messageManager.addMessageListener(LITTLE_ZEN_THEME_MESSAGE_NAME, listener);
+        const scriptUrl = `data:application/javascript;charset=utf-8,${encodeURIComponent(
+          getLittleZenThemeFrameScript(requestId)
+        )}`;
+        messageManager.loadFrameScript(scriptUrl, false);
+      } catch (error) {
+        finish(null);
+      }
+    });
+  }
+
+  async function getLittleZenAsyncPageTheme(browser) {
+    const lookups = [
+      getContentTaskPageTheme(browser),
+      getMessageManagerPageTheme(browser),
+    ];
+
+    return await new Promise((resolve) => {
+      let pending = lookups.length;
+      const finishEmpty = () => {
+        pending--;
+        if (pending === 0) {
+          resolve(null);
+        }
+      };
+
+      for (const lookup of lookups) {
+        Promise.resolve(lookup)
+          .then((theme) => {
+            if (theme?.bg) {
+              resolve(theme);
+            } else {
+              finishEmpty();
+            }
+          })
+          .catch(() => finishEmpty());
+      }
+    });
+  }
+
+  function getLittleZenChromePageTheme(win) {
+    const browser = win.gBrowser?.selectedBrowser;
+    const href = getLittleZenThemeUrl(win)?.href || "";
+    const browserHref = browser?.currentURI?.spec || "";
+    let docHref = "";
+    let theme = null;
+    try {
+      docHref = browser?.contentDocument?.location?.href || "";
+      const chromeThemeAllowed = !docHref || !browserHref || docHref === browserHref;
+      theme =
+        (chromeThemeAllowed ? getTopVisibleTheme(browser) : null) ||
+        (chromeThemeAllowed ? getThemeColorTheme(browser) : null) ||
+        (chromeThemeAllowed ? getThemeFromElement(browser?.contentDocument?.defaultView, browser?.contentDocument?.body, "body") : null) ||
+        (chromeThemeAllowed ? getThemeFromElement(browser?.contentDocument?.defaultView, browser?.contentDocument?.documentElement, "html") : null) ||
+        (chromeThemeAllowed ? getDocumentCanvasTheme(browser) : null);
+    } catch (error) {
+      log("Little Zen page theme probe failed", error);
+    }
+    theme =
+      theme ||
+      (href ? null : getNeutralHeaderShade(win)) ||
+      getChromeToolbarFallbackTheme(win);
+    return {
+      ...theme,
+      href,
+    };
+  }
+
+  function getLittleZenThemeUrl(win) {
+    try {
+      const spec =
+        win.gBrowser?.selectedBrowser?.currentURI?.spec ||
+        win.__littleZenRoutedURL ||
+        win.__littleZenPendingURL;
+      if (spec && !spec.startsWith("about:")) {
+        return new URL(spec);
+      }
+    } catch (error) {}
+    return null;
+  }
+
+  function getLittleZenThemeCacheKeys(href) {
+    const keys = [];
+    const raw = String(href || "");
+    if (!raw) {
+      return keys;
+    }
+    keys.push(`page:${raw}`);
+    try {
+      const url = new URL(raw);
+      if (/^https?:$/i.test(url.protocol) && url.hostname) {
+        keys.push(`host:${url.hostname.toLowerCase()}`);
+      }
+    } catch (error) {}
+    return keys;
+  }
+
+  function rememberLittleZenTheme(theme, href) {
+    if (!theme?.bg || !href || theme.source === "toolbar-fallback" || theme.source === "unknown-page") {
+      return;
+    }
+    for (const key of getLittleZenThemeCacheKeys(href)) {
+      littleZenThemeCache.set(key, theme);
+    }
+    while (littleZenThemeCache.size > LITTLE_ZEN_THEME_CACHE_LIMIT) {
+      littleZenThemeCache.delete(littleZenThemeCache.keys().next().value);
+    }
+  }
+
+  function getRememberedLittleZenTheme(href) {
+    for (const key of getLittleZenThemeCacheKeys(href)) {
+      const theme = littleZenThemeCache.get(key);
+      if (theme?.bg) {
+        return {
+          ...theme,
+          source: theme.source === "host-cache" ? "host-cache" : theme.source || "target-cache",
+        };
+      }
+    }
+    return null;
+  }
+
+  function applyLittleZenResolvedTheme(win, theme, reason = "unknown") {
+    if (!isLittleWindow(win) || !theme) {
+      return;
+    }
+
+    const root = win.document.documentElement;
+    const url = getLittleZenThemeUrl(win);
+    const themeColor = theme?.bg || (
+      root.hasAttribute("zen-should-be-dark-mode")
+        ? "rgb(16, 18, 24)"
+        : "rgb(245, 247, 251)"
+    );
+    const themeRgb = parseCssRgb(themeColor) || (
+      root.hasAttribute("zen-should-be-dark-mode")
+        ? { r: 16, g: 18, b: 24 }
+        : { r: 245, g: 247, b: 251 }
+    );
+    const header = themeColor;
+    const foreground = getStableHeaderForeground(themeRgb, theme?.fg);
+    const windowBackground = themeColor;
+    const isLightTheme = getRelativeLuminance(themeRgb) > 0.56;
+    const controlOutline = isLightTheme
+      ? "rgba(0, 0, 0, 0.14)"
+      : "rgba(255, 255, 255, 0.13)";
+    const pageOutline = isLightTheme
+      ? "rgba(0, 0, 0, 0.24)"
+      : "rgba(255, 255, 255, 0.22)";
+    const tintBackground = windowBackground;
+
+    setCssVar(root, "--little-zen-page-header-background", header);
+    setCssVar(root, "--little-zen-page-header-foreground", foreground);
+    setCssVar(root, "--little-zen-window-theme-background", windowBackground);
+    setCssVar(root, "--little-zen-theme-outline", controlOutline);
+    setCssVar(root, "--little-zen-page-outline", pageOutline);
+    setCssVar(root, "--blended-addressbar-frame-background", windowBackground);
+    setCssVar(root, "--blended-addressbar-window-tint-background", tintBackground);
+    setCssVar(
+      win.document.getElementById("zen-browser-background"),
+      "--blended-addressbar-window-tint-background",
+      tintBackground
+    );
+    rememberLittleZenTheme(theme, theme.href || url?.href || "");
+
+    log("Little Zen blended theme updated", {
+      reason,
+      href: url?.href ?? null,
+      source: theme?.source ?? null,
+      header,
+      foreground,
+      windowBackground,
+      controlOutline,
+      pageOutline,
+      tintBackground,
+    });
+  }
+
+  async function updateLittleZenBlendedTheme(win, reason = "unknown") {
+    if (!isLittleWindow(win)) {
+      return;
+    }
+
+    const browser = win.gBrowser?.selectedBrowser;
+    const expectedHref = getLittleZenThemeUrl(win)?.href || "";
+    const chromeTheme = getLittleZenChromePageTheme(win);
+    const rememberedTheme = getRememberedLittleZenTheme(expectedHref);
+    if (rememberedTheme?.bg && chromeTheme?.source === "toolbar-fallback") {
+      applyLittleZenResolvedTheme(win, rememberedTheme, `${reason}:retained`);
+    } else {
+      applyLittleZenResolvedTheme(win, chromeTheme, reason);
+    }
+
+    const contentTheme = await getLittleZenAsyncPageTheme(browser);
+    if (!contentTheme?.bg || !isLittleWindow(win)) {
+      return;
+    }
+    const currentHref = getLittleZenThemeUrl(win)?.href || "";
+    if (expectedHref && currentHref && expectedHref !== currentHref) {
+      return;
+    }
+    applyLittleZenResolvedTheme(win, contentTheme, `${reason}:content`);
+  }
+
   function getLittleWindowUrl(win) {
     try {
       const browser = win.gBrowser?.selectedBrowser;
@@ -905,6 +2187,250 @@
       }
     } catch (e) {}
     return null;
+  }
+
+  function getLittleWindowRouteUrl(win) {
+    return (
+      win?.__littleZenRoutedURL ||
+      win?.__littleZenPendingURL ||
+      getLittleWindowUrl(win)
+    );
+  }
+
+  function getInitialTargetWorkspaceId(win, mainWin) {
+    const activeWorkspaceId = getActiveWorkspaceId(mainWin);
+    const url = getLittleWindowRouteUrl(win);
+    const routeDebugBase = {
+      routedUrl: win?.__littleZenRoutedURL ?? null,
+      pendingUrl: win?.__littleZenPendingURL ?? null,
+      currentUrl: getLittleWindowUrl(win),
+      selectedUrl: url,
+      activeWorkspaceId,
+      workspaces: getWorkspaces(mainWin).map((workspace) => ({
+        uuid: workspace?.uuid ?? null,
+        id: workspace?.id ?? null,
+        name: workspace?.name ?? null,
+      })),
+    };
+
+    if (!url) {
+      log("Little Zen routing target: no URL, using active workspace", routeDebugBase);
+      return activeWorkspaceId;
+    }
+
+    try {
+      const routingManager = mainWin.gZenSpaceRoutingManager;
+      const route = mainWin.gZenSpaceRoutingManager?.routeUri?.(url, {
+        fromExternal: true,
+      });
+      const defaultExternalRoute =
+        routingManager?.getDefaultExternalRoute?.() ?? null;
+      log("Little Zen routing target: routeUri result", {
+        ...routeDebugBase,
+        route,
+        defaultExternalRoute,
+      });
+      if (route && route !== "most-recent-space") {
+        const workspace = getWorkspaceByRouteTarget(mainWin, route);
+        if (workspace) {
+          log("Little Zen routing target: resolved routed workspace", {
+            route,
+            workspaceId: workspace.uuid,
+            workspaceName: workspace.name,
+          });
+          return workspace.uuid;
+        }
+        log("Little Zen routing target: route did not match a workspace", {
+          route,
+          ...routeDebugBase,
+        });
+      }
+    } catch (error) {
+      log("Could not resolve Little Zen route target workspace", {
+        error,
+        ...routeDebugBase,
+      });
+    }
+
+    log("Little Zen routing target: using active workspace fallback", routeDebugBase);
+    return activeWorkspaceId;
+  }
+
+  function resolveLittleZenTargetWorkspace(win, mainWin, reason = "unknown") {
+    const workspaceId = getInitialTargetWorkspaceId(win, mainWin);
+    const workspace = getWorkspaceById(mainWin, workspaceId);
+    log("Little Zen routing target: final workspace decision", {
+      reason,
+      workspaceId,
+      workspaceName: workspace?.name ?? null,
+      containerTabId: getWorkspaceContainerId(workspace),
+      routeUrl: getLittleWindowRouteUrl(win),
+    });
+    return workspace;
+  }
+
+  function resolveLittleZenRoutingDecision(
+    win,
+    mainWin,
+    url,
+    triggeringPrincipal,
+    reason = "unknown"
+  ) {
+    let beforeRouteResult = null;
+    let userContextId;
+    let hasZenDefaultUserContextId = false;
+    let forcedWorkspaceId;
+
+    try {
+      beforeRouteResult = mainWin.gZenSpaceRoutingManager?.onBeforeAddTab?.(
+        url,
+        {
+          fromExternal: true,
+          skipRoute: false,
+          pinned: false,
+          tabGroup: null,
+        },
+        mainWin
+      );
+    } catch (error) {
+      log("Little Zen routing target: onBeforeAddTab failed", {
+        error,
+        url,
+        reason,
+      });
+    }
+
+    if (beforeRouteResult?.isRouteFound) {
+      userContextId = beforeRouteResult.userContextId;
+      hasZenDefaultUserContextId = true;
+      forcedWorkspaceId = beforeRouteResult.targetRoute;
+    } else {
+      try {
+        [userContextId, hasZenDefaultUserContextId, forcedWorkspaceId] =
+          mainWin.gZenWorkspaces?.getContextIdIfNeeded?.(
+            undefined,
+            true,
+            triggeringPrincipal
+          ) ?? [undefined, false, undefined];
+      } catch (error) {
+        log("Little Zen routing target: getContextIdIfNeeded failed", {
+          error,
+          url,
+          reason,
+        });
+      }
+    }
+
+    const routeWorkspace =
+      getWorkspaceByRouteTarget(mainWin, beforeRouteResult?.targetRoute) ??
+      getWorkspaceById(mainWin, forcedWorkspaceId) ??
+      resolveLittleZenTargetWorkspace(win, mainWin, reason);
+    const targetContainerId =
+      typeof userContextId === "undefined" || userContextId === null
+        ? getWorkspaceContainerId(routeWorkspace)
+        : Number.parseInt(userContextId, 10) || 0;
+
+    log("Little Zen routing target: Zen routing decision", {
+      reason,
+      url,
+      beforeRouteResult,
+      forcedWorkspaceId,
+      targetWorkspaceId: routeWorkspace?.uuid ?? null,
+      targetWorkspaceName: routeWorkspace?.name ?? null,
+      userContextId,
+      targetContainerId,
+      hasZenDefaultUserContextId,
+    });
+
+    return {
+      beforeRouteResult,
+      targetWorkspace: routeWorkspace,
+      targetContainerId,
+      hasZenDefaultUserContextId,
+    };
+  }
+
+  function setCssVar(element, name, value) {
+    if (!element?.style) {
+      return;
+    }
+    if (value) {
+      element.style.setProperty(name, value);
+    } else {
+      element.style.removeProperty(name);
+    }
+  }
+
+  async function placeTabInWorkspace(mainWin, tab, workspaceId) {
+    const workspaces = mainWin?.gZenWorkspaces;
+    if (!workspaces || !tab || !workspaceId) {
+      return false;
+    }
+
+    try {
+      if (typeof workspaces.moveTabToWorkspace === "function") {
+        workspaces.moveTabToWorkspace(tab, workspaceId);
+      } else {
+        tab.setAttribute("zen-workspace-id", workspaceId);
+      }
+
+      if (workspaces.lastSelectedWorkspaceTabs) {
+        workspaces.lastSelectedWorkspaceTabs[workspaceId] = tab;
+      }
+
+      if (typeof workspaces.changeWorkspaceWithID === "function") {
+        await workspaces.changeWorkspaceWithID(workspaceId);
+      } else {
+        const workspace = getWorkspaceById(mainWin, workspaceId);
+        if (workspace) {
+          await workspaces.changeWorkspace?.(workspace);
+        }
+      }
+
+      mainWin.gBrowser.selectedTab = tab;
+      mainWin.gBrowser.selectedBrowser?.focus?.();
+      return true;
+    } catch (error) {
+      log("placeTabInWorkspace failed", error);
+      return false;
+    }
+  }
+
+  async function adoptLiveTabIntoWorkspace(win, mainWin, workspaceId) {
+    const sourceTab = win.gBrowser?.selectedTab;
+    if (
+      !sourceTab ||
+      !mainWin?.gBrowser ||
+      typeof mainWin.gBrowser.adoptTab !== "function"
+    ) {
+      return null;
+    }
+
+    try {
+      sourceTab.removeAttribute("zen-empty-tab");
+      const adoptedTab = mainWin.gBrowser.adoptTab(sourceTab, {
+        tabIndex: Infinity,
+      });
+      if (!adoptedTab) {
+        return null;
+      }
+
+      await placeTabInWorkspace(mainWin, adoptedTab, workspaceId);
+      mainWin.focus();
+      win.setTimeout(() => {
+        if (!win.closed) {
+          win.close();
+        }
+      }, 150);
+      log("transferTabToWorkspace: adoptTab succeeded", {
+        sourceTabId: sourceTab.id ?? null,
+        adoptedTabId: adoptedTab.id ?? null,
+      });
+      return adoptedTab;
+    } catch (error) {
+      log("transferTabToWorkspace: adoptTab failed", error);
+      return null;
+    }
   }
 
   async function transferTabToWorkspace(win, workspaceId) {
@@ -924,21 +2450,26 @@
     log("Transferring tab to workspace", { url, workspace: workspace.name });
 
     // Fallback: open URL in a new tab in the target workspace (causes reload)
-    const doFallback = () => {
+    const doFallback = async () => {
       if (!url) {
         mainWin.focus();
         win.close();
         return;
       }
       try {
-        const newTab = mainWin.gBrowser.addTab(url, {
+        const addTabOptions = {
           triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
           skipAnimation: true,
-        });
-        if (newTab) {
-          newTab.setAttribute("zen-workspace-id", workspaceId);
+          skipRoute: true,
+        };
+        const fallbackContainerId = getWorkspaceContainerId(workspace);
+        if (fallbackContainerId) {
+          addTabOptions.userContextId = fallbackContainerId;
         }
-        mainWin.gBrowser.selectedTab = newTab;
+        const newTab = mainWin.gBrowser.addTab(url, addTabOptions);
+        if (newTab) {
+          await placeTabInWorkspace(mainWin, newTab, workspaceId);
+        }
         mainWin.focus();
       } catch (e) {
         log("transferTabToWorkspace fallback error", e);
@@ -959,84 +2490,14 @@
     }
 
     try {
-      // 1. Switch the main window to the target workspace first
-      await mainWin.gZenWorkspaces?.changeWorkspace?.(workspace);
-
-      // 2. Open an about:blank tab as the destination — no navigation yet
-      const destTab = mainWin.gBrowser.addTab("about:blank", {
-        triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
-        skipAnimation: true,
-      });
-      if (!destTab) {
-        return doFallback();
+      const adoptedTab = await adoptLiveTabIntoWorkspace(win, mainWin, workspaceId);
+      if (!adoptedTab) {
+        await doFallback();
       }
-      destTab.setAttribute("zen-workspace-id", workspaceId);
-
-      const destBrowser = destTab.linkedBrowser;
-
-      // 3. Wait for the destination browser frame to be ready
-      await new Promise(resolve => {
-        let attempts = 0;
-        const check = () => {
-          if (destBrowser.webNavigation || ++attempts >= 30) {
-            resolve();
-          } else {
-            win.setTimeout(check, 50);
-          }
-        };
-        check();
-      });
-
-      // 4. Stop any pending load so swapDocShells doesn't race
-      try { destBrowser.stop(); } catch (e) {}
-
-      // 5. Match the remote process type of our source browser (Fission compat)
-      try {
-        const remoteType = ourBrowser.remoteType;
-        if (remoteType && destBrowser.remoteType !== remoteType) {
-          await mainWin.gBrowser.updateBrowserRemoteness(destBrowser, { remoteType });
-        }
-      } catch (e) {
-        log("transferTabToWorkspace: could not match remoteness, continuing", e);
-      }
-
-      // 6. Atomically move the live docShell — session history, scroll, forms, all of it
-      destBrowser.swapDocShells(ourBrowser);
-
-      // 6b. Load about:blank into the now-empty source browser so Zen's tab
-      //     close path doesn't walk a detached DOM and throw on parentElement.
-      try {
-        ourBrowser.loadURI(Services.io.newURI("about:blank"), {
-          triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
-        });
-      } catch (e) {
-        try {
-          ourBrowser.fixupAndLoadURIString("about:blank", {
-            triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
-          });
-        } catch (_) {}
-      }
-
-      // 7. Sync tab metadata
-      try {
-        const title = destBrowser.contentTitle;
-        if (title) {
-          destTab.label = title;
-          mainWin.gBrowser._tabAttrModified?.(destTab, ["label"]);
-        }
-      } catch (e) {}
-
-      try { mainWin.gZenWorkspaces?.updateTabsContainers?.(); } catch (e) {}
-
-      mainWin.gBrowser.selectedTab = destTab;
-      mainWin.focus();
-
-      log("transferTabToWorkspace: swapDocShells succeeded");
-      win.setTimeout(() => win.close(), 50);
 
     } catch (err) {
-      log("transferTabToWorkspace: swapDocShells failed, falling back", err);
-      doFallback();
+      log("transferTabToWorkspace: live transfer failed, falling back", err);
+      await doFallback();
     }
   }
 
@@ -1051,51 +2512,69 @@
       return;
     }
 
-    // Container button
-    const picker = doc.createXULElement("hbox");
+    // Split workspace control, mirroring Zen's toolbarbutton/menuitem shape.
+    const picker = doc.createXULElement("toolbaritem");
     picker.id = PICKER_ID;
     picker.setAttribute("align", "center");
+    picker.classList.add("chromeclass-toolbar-additional");
 
-    // Space name label (click = live transfer)
-    const label = doc.createXULElement("label");
-    label.id = PICKER_ID + "-label";
-    label.setAttribute("crop", "end");
-    label.setAttribute("flex", "1");
+    const openButton = doc.createXULElement("toolbarbutton");
+    openButton.id = PICKER_ID + "-open";
+    openButton.classList.add(
+      "toolbarbutton-1",
+      "chromeclass-toolbar-additional",
+      "zen-little-window-space-button"
+    );
+    openButton.setAttribute("crop", "end");
+    openButton.setAttribute("flex", "1");
+    openButton.setAttribute("orient", "horizontal");
+    openButton.setAttribute("tooltip", "dynamic-shortcut-tooltip");
 
-    // Dropdown arrow (click = open menu)
-    const arrow = doc.createXULElement("label");
+    const openButtonLabel = doc.createXULElement("label");
+    openButtonLabel.id = PICKER_ID + "-label";
+    openButtonLabel.setAttribute("crop", "end");
+    openButtonLabel.setAttribute("flex", "1");
+    openButton.appendChild(openButtonLabel);
+
+    const shortcutHint = doc.createXULElement("label");
+    shortcutHint.id = PICKER_ID + "-shortcut";
+    shortcutHint.setAttribute("value", getOpenShortcutDisplay());
+    shortcutHint.setAttribute("tooltiptext", "Open in main window");
+    openButton.appendChild(shortcutHint);
+
+    const arrow = doc.createXULElement("toolbarbutton");
     arrow.id = PICKER_ID + "-arrow";
-    arrow.setAttribute("value", "▾");
+    arrow.classList.add(
+      "toolbarbutton-1",
+      "chromeclass-toolbar-additional",
+      "zen-little-window-space-arrow"
+    );
+    arrow.setAttribute("type", "menu");
+    arrow.setAttribute("label", "▾");
+    arrow.setAttribute("orient", "horizontal");
+
+    const arrowLabel = doc.createXULElement("label");
+    arrowLabel.id = PICKER_ID + "-arrow-label";
+    arrowLabel.setAttribute("value", "▾");
+    arrow.appendChild(arrowLabel);
 
     // Popup menu
     const popup = doc.createXULElement("menupopup");
     popup.id = PICKER_MENU_ID;
 
-    picker.appendChild(label);
+    picker.appendChild(openButton);
     picker.appendChild(arrow);
-    // Keep popup inside picker so XUL command events fire on single click
-    picker.appendChild(popup);
+    arrow.appendChild(popup);
 
     // State: which workspace is targeted
-    let targetWorkspaceId = getActiveWorkspaceId(mainWin);
+    let targetWorkspaceId = getInitialTargetWorkspaceId(win, mainWin);
 
     const applyWorkspaceTheme = (wsId) => {
       try {
-        const ws = getWorkspaceById(mainWin, wsId);
-        const color = ws?.color ?? null;
         const root = doc.documentElement;
-        if (color) {
-          root.style.setProperty("--zen-primary-color", color);
-        } else {
-          // Fall back to the main window's current --zen-primary-color
-          const mainColor = mainWin.document.documentElement.style
-            .getPropertyValue("--zen-primary-color");
-          if (mainColor) {
-            root.style.setProperty("--zen-primary-color", mainColor);
-          } else {
-            root.style.removeProperty("--zen-primary-color");
-          }
-        }
+        setCssVar(root, "--little-zen-window-background", "");
+        setCssVar(root, "--little-zen-window-toolbar-background", "");
+        picker.setAttribute("zen-workspace-id", wsId ?? "");
       } catch (e) {}
     };
 
@@ -1103,37 +2582,199 @@
       const ws = getWorkspaceById(mainWin, targetWorkspaceId);
       const name = ws?.name ?? "Space";
       const icon = ws?.icon && !ws.icon.endsWith(".svg") ? ws.icon + "  " : "";
-      label.setAttribute("value", icon + name);
-      label.setAttribute("tooltiptext", name);
+      const label = `Open in ${icon}${name}`;
+      openButton.setAttribute("label", label);
+      openButton.setAttribute("shortcut", getOpenShortcutDisplay());
+      openButtonLabel.setAttribute("value", label);
+      openButton.setAttribute("tooltiptext", `Open in ${name}`);
+      arrow.setAttribute("tooltiptext", name);
       applyWorkspaceTheme(targetWorkspaceId);
+    };
+
+    const refreshRouteTarget = () => {
+      const routedWorkspaceId = getInitialTargetWorkspaceId(win, mainWin);
+      if (routedWorkspaceId && routedWorkspaceId !== targetWorkspaceId) {
+        targetWorkspaceId = routedWorkspaceId;
+        updateLabel();
+      }
     };
 
     const openMenu = () => {
       const workspaces = getWorkspaces(mainWin);
       while (popup.firstChild) popup.removeChild(popup.firstChild);
+      popup.classList.add("zen-little-window-space-menu");
+
+      const searchRow = doc.createXULElement("hbox");
+      searchRow.className = "zen-little-window-space-menu-search-row";
+      searchRow.setAttribute("align", "center");
+
+      const searchIcon = doc.createXULElement("image");
+      searchIcon.className = "zen-little-window-space-menu-search-icon";
+      searchRow.appendChild(searchIcon);
+
+      const searchInput = doc.createElementNS(
+        "http://www.w3.org/1999/xhtml",
+        "input"
+      );
+      searchInput.id = PICKER_MENU_ID + "-search";
+      searchInput.className = "zen-little-window-space-menu-search";
+      searchInput.setAttribute("type", "search");
+      searchInput.setAttribute("placeholder", "Search spaces");
+      searchInput.setAttribute("autocomplete", "off");
+      searchRow.appendChild(searchInput);
+      popup.appendChild(searchRow);
+
+      const noResults = doc.createXULElement("label");
+      noResults.className = "zen-little-window-space-menu-no-results";
+      noResults.setAttribute("value", "No spaces found");
+      noResults.hidden = true;
+      popup.appendChild(noResults);
+
+      const selectWorkspace = (ws) => {
+        targetWorkspaceId = ws.uuid;
+        updateLabel();
+        try {
+          popup.hidePopup();
+        } catch (error) {}
+      };
+
+      const rows = [];
       workspaces.forEach(ws => {
         const item = doc.createXULElement("menuitem");
-        const icon = ws.icon && !ws.icon.endsWith(".svg") ? ws.icon + "  " : "";
-        item.setAttribute("label", icon + ws.name);
-        item.setAttribute("type", "radio");
+        item.className = "zen-workspace-context-menu-item zen-little-window-space-menu-item";
+        item.__littleZenWorkspace = ws;
+        item.setAttribute("zen-workspace-id", ws.uuid);
+        const icon = getWorkspaceDisplayIcon(ws);
+        const iconIsSvg = !!icon && icon.endsWith(".svg");
+        if (iconIsSvg) {
+          item.setAttribute("image", icon);
+          item.classList.add("menuitem-iconic", "zen-workspace-context-icon");
+          item.setAttribute("label", ws.name);
+        } else {
+          item.setAttribute("label", `${icon}  ${ws.name}`);
+        }
+        item.setAttribute("data-label", `${ws.name ?? ""} ${icon ?? ""}`.toLowerCase());
         if (ws.uuid === targetWorkspaceId) {
-          item.setAttribute("checked", "true");
+          item.setAttribute("selected", "true");
         }
         item.addEventListener("command", () => {
-          targetWorkspaceId = ws.uuid;
-          updateLabel();
-        });        popup.appendChild(item);
+          selectWorkspace(ws);
+        });
+        rows.push(item);
+        popup.appendChild(item);
       });
+
+      const visibleRows = () => rows.filter(item => !item.hidden);
+      const setSelectedRow = (row) => {
+        rows.forEach(item => item.removeAttribute("selected"));
+        row?.setAttribute("selected", "true");
+        row?.scrollIntoView?.({ block: "nearest" });
+      };
+      const filterRows = () => {
+        const query = searchInput.value.toLowerCase().trim();
+        let shown = 0;
+        for (const item of rows) {
+          const matches = !query || item.getAttribute("data-label").includes(query);
+          item.hidden = !matches;
+          if (matches) {
+            shown++;
+          }
+        }
+        noResults.hidden = shown > 0;
+        if (!visibleRows().some(item => item.hasAttribute("selected"))) {
+          setSelectedRow(visibleRows()[0]);
+        }
+      };
+      const moveSelection = (direction) => {
+        const visible = visibleRows();
+        if (!visible.length) {
+          return;
+        }
+        const currentIndex = Math.max(
+          0,
+          visible.findIndex(item => item.hasAttribute("selected"))
+        );
+        setSelectedRow(visible[(currentIndex + direction + visible.length) % visible.length]);
+      };
+      const acceptSelection = () => {
+        const selected = visibleRows().find(item => item.hasAttribute("selected"));
+        if (selected?.__littleZenWorkspace) {
+          selectWorkspace(selected.__littleZenWorkspace);
+        }
+      };
+      const stopSearchEvent = (event) => {
+        if (event.target === searchInput || searchRow.contains(event.target)) {
+          if (event.type === "keydown") {
+            if (event.key === "ArrowDown" || (event.key === "Tab" && !event.shiftKey)) {
+              event.preventDefault();
+              event.stopPropagation();
+              moveSelection(1);
+              return;
+            }
+            if (event.key === "ArrowUp" || (event.key === "Tab" && event.shiftKey)) {
+              event.preventDefault();
+              event.stopPropagation();
+              moveSelection(-1);
+              return;
+            }
+            if (event.key === "Enter") {
+              event.preventDefault();
+              event.stopPropagation();
+              acceptSelection();
+              return;
+            }
+          }
+          event.stopPropagation();
+        }
+      };
+
+      for (const eventName of [
+        "keydown",
+        "keypress",
+        "keyup",
+        "mousedown",
+        "mouseup",
+        "click",
+      ]) {
+        popup.addEventListener(eventName, stopSearchEvent, true);
+      }
+      searchInput.addEventListener("input", filterRows);
+      popup.addEventListener(
+        "popupshown",
+        () => {
+          searchInput.focus();
+          searchInput.select();
+        },
+        { once: true }
+      );
       popup.openPopup(picker, "after_start", 0, 0, false, false);
     };
 
-    label.addEventListener("click", () => {
+    const openSelectedWorkspace = () => {
       transferTabToWorkspace(win, targetWorkspaceId);
+    };
+
+    openButton.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      openSelectedWorkspace();
+    });
+
+    openButton.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+
+    arrow.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openMenu();
     });
 
     arrow.addEventListener("click", (e) => {
+      e.preventDefault();
       e.stopPropagation();
-      openMenu();
     });
 
     // Ctrl/Cmd+O shortcut
@@ -1146,22 +2787,30 @@
       ) {
         e.preventDefault();
         e.stopPropagation();
-        transferTabToWorkspace(win, targetWorkspaceId);
+        openSelectedWorkspace();
       }
     }, true);
 
     // Keep label in sync when main window changes workspace
     try {
       mainWin.addEventListener("ZenWorkspaceChanged", () => {
-        const newId = getActiveWorkspaceId(mainWin);
-        if (newId) {
-          targetWorkspaceId = newId;
+        const routedOrActiveId = getInitialTargetWorkspaceId(win, mainWin);
+        if (routedOrActiveId) {
+          log("Little Zen picker target refreshed after workspace change", {
+            routedOrActiveId,
+            activeWorkspaceId: getActiveWorkspaceId(mainWin),
+            routeUrl: getLittleWindowRouteUrl(win),
+          });
+          targetWorkspaceId = routedOrActiveId;
           updateLabel();
         }
       });
     } catch (e) {}
 
     updateLabel();
+    win.__littleZenRefreshSpacePickerTarget = refreshRouteTarget;
+    win.setTimeout(refreshRouteTarget, 150);
+    win.setTimeout(refreshRouteTarget, 750);
 
     // Insert into .customizableui-special-spring2 (right-side nav-bar spring)
     const spring2 = doc.querySelector(".customizableui-special-spring2");
@@ -1291,7 +2940,7 @@
     }
 
     win.document.documentElement.setAttribute(LITTLE_WINDOW_ATTR, "true");
-    win.document.documentElement.setAttribute("zen-no-padding", "true");
+    win.document.documentElement.toggleAttribute("zen-no-padding", isEmptyLittleWindow(win));
     win.__littleZenLifecycleCleanup = cleanup;
 
     setWindowResizable(win, false);
@@ -1323,12 +2972,16 @@
     patchZenUIManager(win);
     patchUrlbar(win);
     attachEmptyTabStateTracking(win);
+    attachTransparentBrowserPrefSync(win);
+    attachLittleWindowCloseButtonGuard(win);
+    syncLittleWindowTransparentBrowsers(win);
     syncEmptyTabState(win, "apply-mode");
+    updateLittleZenBlendedTheme(win, "apply-mode");
     refreshLittleWindowLayout(win);
     attachAutoClose(win);
     if (win.__littleZenPendingURL) {
       schedulePendingNavigationFlush(win, "apply-mode");
-    } else {
+    } else if (!win.__littleZenSuppressUrlbarFocus) {
       focusUrlbar(win);
     }
     ensureSpacePicker(win);
@@ -1421,15 +3074,24 @@
   const LittleZen = {
     queueNavigation(win, url, meta = {}) {
       if (!url) {
+        delete win.__littleZenSuppressUrlbarFocus;
         return;
       }
 
+      win.__littleZenSuppressUrlbarFocus = true;
+      closeLittleWindowUrlbar(win, "queue-navigation");
       win.__littleZenPendingURL = url;
+      win.__littleZenRoutedURL = url;
       win.__littleZenPendingURLMeta = meta;
       log("Queued Little Zen navigation", {
         url,
         source: meta.source ?? "unknown",
       });
+      try {
+        win.__littleZenRefreshSpacePickerTarget?.();
+      } catch (error) {
+        log("Could not refresh Little Zen routed workspace target", error);
+      }
 
       if (win.gBrowserInit?.delayedStartupFinished) {
         schedulePendingNavigationFlush(win, "queue-navigation-ready");
@@ -1467,6 +3129,7 @@
           this.queueNavigation(browserWindow, url, { source, triggeringPrincipal });
           browserWindow.focus();
           if (!url) {
+            delete browserWindow.__littleZenSuppressUrlbarFocus;
             focusUrlbar(browserWindow);
           }
           return browserWindow;
