@@ -662,12 +662,64 @@
       listeners.push([target, type, listener]);
     };
 
-    const isUrlbarTarget = event => {
+    const isUrlbarButtonTarget = target => {
+      if (!target?.closest) {
+        return false;
+      }
+      try {
+        return !!target.closest(
+          [
+            "#identity-box",
+            "#tracking-protection-icon-container",
+            "#page-action-buttons",
+            "#urlbar-go-button",
+            "#urlbar-revert-button",
+            "#reader-mode-button",
+            "#picture-in-picture-button",
+            ".urlbar-page-action",
+            "toolbarbutton",
+            "button",
+          ].join(",")
+        );
+      } catch (error) {
+        return false;
+      }
+    };
+
+    const isUrlbarInputTarget = target => {
+      if (!target) {
+        return false;
+      }
+      if (target === urlbar) {
+        return true;
+      }
+      if (isUrlbarButtonTarget(target)) {
+        return false;
+      }
+      if (!target.closest) {
+        return false;
+      }
+      try {
+        return !!target.closest(
+          [
+            "#urlbar-input",
+            ".urlbar-input-box",
+            ".urlbar-input-container",
+            ".urlbar-background",
+            "#urlbar-search-mode-indicator",
+          ].join(",")
+        );
+      } catch (error) {
+        return false;
+      }
+    };
+
+    const isBlockedUrlbarTarget = event => {
       if (!urlbar || !event?.target) {
         return false;
       }
       try {
-        return event.target === urlbar || urlbar.contains(event.target);
+        return urlbar.contains(event.target) && isUrlbarInputTarget(event.target);
       } catch (error) {
         return false;
       }
@@ -688,7 +740,7 @@
     };
 
     const blockUrlbarTarget = event => {
-      if (isUrlbarTarget(event)) {
+      if (isBlockedUrlbarTarget(event)) {
         blockUrlbarOpen(event, `blocked-${event.type}`);
       }
     };
@@ -705,7 +757,7 @@
       const key = event.key?.toLowerCase?.();
       const usesAccel = AppConstants.platform === "macosx" ? event.metaKey : event.ctrlKey;
       if (
-        (usesAccel && (key === "l" || key === "k")) ||
+        (usesAccel && (key === "l" || key === "k" || key === "t")) ||
         (event.altKey && key === "d") ||
         event.key === "F6"
       ) {
@@ -717,6 +769,9 @@
       addListener(urlbar, type, blockUrlbarTarget);
     }
     addListener(doc.getElementById("Browser:OpenLocation"), "command", blockOpenLocationCommand);
+    addListener(doc.getElementById("cmd_newNavigatorTab"), "command", event => {
+      blockUrlbarOpen(event, "blocked-new-tab-command");
+    });
     addListener(win, "keydown", blockOpenLocationKeys);
 
     try {

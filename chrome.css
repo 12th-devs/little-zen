@@ -335,14 +335,29 @@
   background: color-mix(in srgb, currentColor 8%, transparent) !important;
 }
 
-:root[zen-little-window="true"] #urlbar[zen-little-urlbar-disabled="true"],
-:root[zen-little-window="true"] #urlbar[zen-little-urlbar-disabled="true"] * {
+:root[zen-little-window="true"] #urlbar[zen-little-urlbar-disabled="true"] #urlbar-input,
+:root[zen-little-window="true"] #urlbar[zen-little-urlbar-disabled="true"] .urlbar-input-box {
   pointer-events: none !important;
   cursor: default !important;
 }
 
-:root[zen-little-window="true"] #urlbar[zen-little-urlbar-disabled="true"][breakout-extend],
-:root[zen-little-window="true"] #urlbar[zen-little-urlbar-disabled="true"][open] {
+:root[zen-little-window="true"] #urlbar[zen-little-urlbar-disabled="true"] :is(
+  #identity-box,
+  #tracking-protection-icon-container,
+  #page-action-buttons,
+  #urlbar-go-button,
+  #urlbar-revert-button,
+  #reader-mode-button,
+  #picture-in-picture-button,
+  .urlbar-page-action,
+  toolbarbutton,
+  button
+) {
+  pointer-events: auto !important;
+}
+
+:root[zen-little-window="true"] #urlbar[zen-little-urlbar-disabled="true"][breakout-extend] .urlbarView,
+:root[zen-little-window="true"] #urlbar[zen-little-urlbar-disabled="true"][open] .urlbarView {
   visibility: hidden !important;
 }
 
