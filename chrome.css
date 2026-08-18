@@ -23,6 +23,214 @@
   background-color: var(--little-zen-window-theme-background, transparent) !important;
 }
 
+#zen-little-window-loading-overlay {
+  display: none;
+}
+
+:root[zen-little-window="true"][zen-little-window-loading="true"] {
+  background: var(--little-zen-window-theme-background, var(--zen-main-browser-background, transparent)) !important;
+  background-color: var(--little-zen-window-theme-background, var(--zen-main-browser-background, transparent)) !important;
+}
+
+:root[zen-little-window="true"][zen-little-window-loading="true"] #browser,
+:root[zen-little-window="true"][zen-little-window-loading="true"] #zen-appcontent-wrapper,
+:root[zen-little-window="true"][zen-little-window-loading="true"] #tabbrowser-tabbox,
+:root[zen-little-window="true"][zen-little-window-loading="true"] #tabbrowser-tabpanels {
+  background: var(--little-zen-window-theme-background, var(--zen-main-browser-background, transparent)) !important;
+  background-color: var(--little-zen-window-theme-background, var(--zen-main-browser-background, transparent)) !important;
+}
+
+:root[zen-little-window="true"][zen-little-window-loading="true"] :is(
+  #nav-bar,
+  #titlebar,
+  #TabsToolbar,
+  #PersonalToolbar,
+  #zen-appcontent-wrapper,
+  #urlbar,
+  #zen-little-window-space-picker,
+  .titlebar-buttonbox-container
+) {
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+:root[zen-little-window="true"][zen-little-window-loading="true"] #zen-little-window-loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483646;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--little-zen-window-theme-background, var(--zen-main-browser-background, transparent));
+  color: var(--zen-tab-header-foreground, currentColor);
+  -moz-window-dragging: drag;
+}
+
+:root[zen-little-window="true"][zen-little-window-loading="true"]::before {
+  content: "";
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 2147483645;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background:
+    radial-gradient(
+      circle,
+      color-mix(in srgb, currentColor 88%, transparent) 0 18%,
+      color-mix(in srgb, currentColor 18%, transparent) 20% 46%,
+      transparent 48%
+    );
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, currentColor 18%, transparent) inset,
+    0 0 28px color-mix(in srgb, var(--little-zen-page-outline, currentColor) 42%, transparent);
+  animation: little-zen-loading-pulse-centered 1.45s cubic-bezier(0.37, 0, 0.2, 1) infinite;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+:root[zen-little-window="true"][zen-little-window-load-stalled="true"]::before {
+  content: none;
+}
+
+#zen-little-window-loading-pulse {
+  position: relative;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background:
+    radial-gradient(
+      circle,
+      color-mix(in srgb, currentColor 88%, transparent) 0 18%,
+      color-mix(in srgb, currentColor 18%, transparent) 20% 46%,
+      transparent 48%
+    );
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, currentColor 18%, transparent) inset,
+    0 0 28px color-mix(in srgb, var(--little-zen-page-outline, currentColor) 42%, transparent);
+  animation: little-zen-loading-pulse 1.45s cubic-bezier(0.37, 0, 0.2, 1) infinite;
+  -moz-window-dragging: no-drag;
+}
+
+#zen-little-window-loading-pulse::after {
+  content: "";
+  position: absolute;
+  inset: 8px;
+  border-radius: inherit;
+  border: 1px solid color-mix(in srgb, currentColor 34%, transparent);
+  animation: little-zen-loading-ring 1.45s cubic-bezier(0.37, 0, 0.2, 1) infinite;
+}
+
+#zen-little-window-load-fallback {
+  display: none;
+}
+
+:root[zen-little-window="true"][zen-little-window-load-stalled="true"] #zen-little-window-loading-overlay {
+  flex-direction: column;
+  gap: 14px;
+}
+
+:root[zen-little-window="true"][zen-little-window-load-stalled="true"] #zen-little-window-loading-pulse {
+  width: 34px;
+  height: 34px;
+  animation-duration: 1.75s;
+}
+
+:root[zen-little-window="true"][zen-little-window-load-stalled="true"] #zen-little-window-load-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: min(320px, calc(100vw - 48px));
+  color: var(--zen-tab-header-foreground, currentColor);
+  font: menu;
+  -moz-window-dragging: no-drag;
+}
+
+#zen-little-window-load-fallback-title {
+  opacity: 0.78;
+  font-size: 12px;
+}
+
+#zen-little-window-load-fallback-actions {
+  display: flex;
+  gap: 6px;
+}
+
+#zen-little-window-load-fallback-actions button {
+  appearance: none;
+  min-height: 26px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
+  border-radius: var(--toolbarbutton-border-radius, 4px);
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  color: inherit;
+  font: inherit;
+}
+
+#zen-little-window-load-fallback-actions button:hover {
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+
+@keyframes little-zen-loading-pulse {
+  0% {
+    transform: scale(0.84);
+    opacity: 0.42;
+    filter: saturate(0.92);
+  }
+
+  45% {
+    transform: scale(1);
+    opacity: 0.94;
+    filter: saturate(1.08);
+  }
+
+  100% {
+    transform: scale(0.88);
+    opacity: 0.55;
+    filter: saturate(1);
+  }
+}
+
+@keyframes little-zen-loading-pulse-centered {
+  0% {
+    transform: translate(-50%, -50%) scale(0.84);
+    opacity: 0.42;
+    filter: saturate(0.92);
+  }
+
+  45% {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 0.94;
+    filter: saturate(1.08);
+  }
+
+  100% {
+    transform: translate(-50%, -50%) scale(0.88);
+    opacity: 0.55;
+    filter: saturate(1);
+  }
+}
+
+@keyframes little-zen-loading-ring {
+  0% {
+    transform: scale(0.82);
+    opacity: 0.34;
+  }
+
+  50% {
+    transform: scale(1.18);
+    opacity: 0.68;
+  }
+
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+
 @media -moz-pref("browser.tabs.allow_transparent_browser") {
   :root[zen-little-window="true"] {
     --tabpanel-background-color: transparent !important;
@@ -125,6 +333,32 @@
 :root[zen-little-window="true"] #urlbar:not([focused]):not([open]):not([breakout-extend="true"]):hover > .urlbar-background,
 :root[zen-little-window="true"] #urlbar:not([focused]):not([open]):not([breakout-extend="true"]):hover .urlbar-background {
   background: color-mix(in srgb, currentColor 8%, transparent) !important;
+}
+
+:root[zen-little-window="true"] #urlbar[zen-little-urlbar-disabled="true"] #urlbar-input,
+:root[zen-little-window="true"] #urlbar[zen-little-urlbar-disabled="true"] .urlbar-input-box {
+  pointer-events: none !important;
+  cursor: default !important;
+}
+
+:root[zen-little-window="true"] #urlbar[zen-little-urlbar-disabled="true"] :is(
+  #identity-box,
+  #tracking-protection-icon-container,
+  #page-action-buttons,
+  #urlbar-go-button,
+  #urlbar-revert-button,
+  #reader-mode-button,
+  #picture-in-picture-button,
+  .urlbar-page-action,
+  toolbarbutton,
+  button
+) {
+  pointer-events: auto !important;
+}
+
+:root[zen-little-window="true"] #urlbar[zen-little-urlbar-disabled="true"][breakout-extend] .urlbarView,
+:root[zen-little-window="true"] #urlbar[zen-little-urlbar-disabled="true"][open] .urlbarView {
+  visibility: hidden !important;
 }
 
 :root[zen-little-window="true"]:not([zen-has-empty-tab="true"]) #zen-appcontent-wrapper {

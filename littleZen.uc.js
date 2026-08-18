@@ -19,6 +19,8 @@
   const LITTLE_ZEN_THEME_CACHE_LIMIT = 200;
   const LITTLE_ZEN_THEME_MESSAGE_NAME = "little-zen:theme-response";
   const LITTLE_ZEN_THEME_BRIDGE_TIMEOUT_MS = 250;
+  const LITTLE_ZEN_ROUTING_DEBUG_PREF = "extensions.littleZen.debugRouting";
+  const LITTLE_ZEN_STALLED_LOAD_TIMEOUT_MS = 25000;
 
   const PATCH_FLAGS = {
     browserWindowTracker: "__littleZenBrowserWindowTrackerPatched",
@@ -29,8 +31,10 @@
     verticalTabs: "__littleZenVerticalTabsPatched",
     zenUIManager: "__littleZenZenUIManagerPatched",
     urlbar: "__littleZenUrlbarPatched",
+    urlbarDisableGuard: "__littleZenUrlbarDisableGuardAttached",
     emptyState: "__littleZenEmptyStatePatched",
     autoClose: "__littleZenAutoCloseAttached",
+    doubleEscapeClose: "__littleZenDoubleEscapeCloseAttached",
     keyListener: "__littleZenKeyListenerAttached",
     window: "__littleZenBootstrapped",
   };
@@ -92,6 +96,20 @@
     try {
       Services.console.logStringMessage(message);
     } catch (error) {}
+  }
+
+  function isRoutingDebugEnabled() {
+    try {
+      return Services.prefs.getBoolPref(LITTLE_ZEN_ROUTING_DEBUG_PREF, false);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function routeLog(...args) {
+    if (isRoutingDebugEnabled()) {
+      log(...args);
+    }
   }
 
   function isBrowserWindow(win) {
@@ -167,6 +185,14 @@
 
   function releaseLittleWindowPresentation(win, reason = "unknown") {
     if (!isBrowserWindow(win) || win.__littleZenPresentationReleased) {
+      return;
+    }
+
+    if (win.document?.documentElement?.hasAttribute("zen-little-window-loading")) {
+      win.__littleZenReleasePresentationAfterLoading = reason;
+      logLittleWindowState(win, "Deferred Little Zen presentation release while loading", {
+        reason,
+      });
       return;
     }
 
@@ -427,6 +453,7 @@
       if (littleWindow) {
         littleWindow._zenStartupLittleWindow = true;
         littleWindow._zenStartupSyncFlag = "unsynced";
+        littleWindow.__littleZenStartLoadingVeil = !!options.url;
         littleWindow.__littleZenPresentationReleased = false;
         log("Opened Little Zen browser window", {
           startupSyncFlag: littleWindow._zenStartupSyncFlag,
@@ -442,6 +469,12 @@
             LITTLE_WINDOW_ATTR,
             "true"
           );
+          if (littleWindow.__littleZenStartLoadingVeil) {
+            littleWindow.document?.documentElement?.setAttribute(
+              "zen-little-window-loading",
+              "true"
+            );
+          }
         } catch (error) {
           log("Startup flag applied before DOM was ready.", error);
         }
@@ -603,6 +636,168 @@
     urlbar[PATCH_FLAGS.urlbar] = true;
   }
 
+  function attachUrlbarDisableGuard(win) {
+    if (!isBrowserWindow(win) || win[PATCH_FLAGS.urlbarDisableGuard]) {
+      return;
+    }
+
+    const doc = win.document;
+    const urlbar = win.gURLBar;
+    const blockedEvents = [
+      "mousedown",
+      "mouseup",
+      "click",
+      "dblclick",
+      "focusin",
+      "beforeinput",
+      "input",
+    ];
+    const listeners = [];
+
+    const addListener = (target, type, listener) => {
+      if (!target?.addEventListener) {
+        return;
+      }
+      target.addEventListener(type, listener, true);
+      listeners.push([target, type, listener]);
+    };
+
+    const isUrlbarButtonTarget = target => {
+      if (!target?.closest) {
+        return false;
+      }
+      try {
+        return !!target.closest(
+          [
+            "#identity-box",
+            "#tracking-protection-icon-container",
+            "#page-action-buttons",
+            "#urlbar-go-button",
+            "#urlbar-revert-button",
+            "#reader-mode-button",
+            "#picture-in-picture-button",
+            ".urlbar-page-action",
+            "toolbarbutton",
+            "button",
+          ].join(",")
+        );
+      } catch (error) {
+        return false;
+      }
+    };
+
+    const isUrlbarInputTarget = target => {
+      if (!target) {
+        return false;
+      }
+      if (target === urlbar) {
+        return true;
+      }
+      if (isUrlbarButtonTarget(target)) {
+        return false;
+      }
+      if (!target.closest) {
+        return false;
+      }
+      try {
+        return !!target.closest(
+          [
+            "#urlbar-input",
+            ".urlbar-input-box",
+            ".urlbar-input-container",
+            ".urlbar-background",
+            "#urlbar-search-mode-indicator",
+          ].join(",")
+        );
+      } catch (error) {
+        return false;
+      }
+    };
+
+    const isBlockedUrlbarTarget = event => {
+      if (!urlbar || !event?.target) {
+        return false;
+      }
+      try {
+        return urlbar.contains(event.target) && isUrlbarInputTarget(event.target);
+      } catch (error) {
+        return false;
+      }
+    };
+
+    const blockUrlbarOpen = (event, reason) => {
+      if (!isLittleWindow(win)) {
+        return;
+      }
+
+      try {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+        event?.stopImmediatePropagation?.();
+      } catch (error) {}
+
+      closeLittleWindowUrlbar(win, reason);
+    };
+
+    const blockUrlbarTarget = event => {
+      if (isBlockedUrlbarTarget(event)) {
+        blockUrlbarOpen(event, `blocked-${event.type}`);
+      }
+    };
+
+    const blockOpenLocationCommand = event => {
+      blockUrlbarOpen(event, "blocked-open-location-command");
+    };
+
+    const blockOpenLocationKeys = event => {
+      if (!isLittleWindow(win) || event.defaultPrevented) {
+        return;
+      }
+
+      const key = event.key?.toLowerCase?.();
+      const usesAccel = AppConstants.platform === "macosx" ? event.metaKey : event.ctrlKey;
+      if (
+        (usesAccel && (key === "l" || key === "k" || key === "t")) ||
+        (event.altKey && key === "d") ||
+        event.key === "F6"
+      ) {
+        blockUrlbarOpen(event, `blocked-key-${event.key}`);
+      }
+    };
+
+    for (const type of blockedEvents) {
+      addListener(urlbar, type, blockUrlbarTarget);
+    }
+    addListener(doc.getElementById("Browser:OpenLocation"), "command", blockOpenLocationCommand);
+    addListener(doc.getElementById("cmd_newNavigatorTab"), "command", event => {
+      blockUrlbarOpen(event, "blocked-new-tab-command");
+    });
+    addListener(win, "keydown", blockOpenLocationKeys);
+
+    try {
+      urlbar?.setAttribute("zen-little-urlbar-disabled", "true");
+    } catch (error) {}
+
+    win.addEventListener(
+      "unload",
+      () => {
+        for (const [target, type, listener] of listeners) {
+          try {
+            target.removeEventListener(type, listener, true);
+          } catch (error) {}
+        }
+        try {
+          urlbar?.removeAttribute("zen-little-urlbar-disabled");
+        } catch (error) {}
+      },
+      { once: true }
+    );
+
+    win[PATCH_FLAGS.urlbarDisableGuard] = true;
+    closeLittleWindowUrlbar(win, "urlbar-disable-guard-attached");
+    log("Attached Little Zen urlbar disable guard");
+  }
+
   function formatLittleZenUrlbarValue(value) {
     if (typeof value !== "string" || !value) {
       return value;
@@ -717,12 +912,22 @@
         }
       },
 
-      onStateChange(browser, _webProgress, _request, stateFlags) {
+      onStateChange(browser, webProgress, _request, stateFlags) {
         if (
           browser === win.gBrowser?.selectedBrowser &&
+          (webProgress?.isTopLevel ?? true) &&
           stateFlags & Ci.nsIWebProgressListener.STATE_STOP
         ) {
           scheduleThemeUpdate("state-stop");
+          const currentSpec = browser.currentURI?.spec ?? "";
+          if (
+            stateFlags & Ci.nsIWebProgressListener.STATE_IS_NETWORK &&
+            !win.__littleZenPendingURL &&
+            !isEmptyLittleWindow(win) &&
+            currentSpec !== "about:blank"
+          ) {
+            setLittleWindowLoading(win, false, "state-stop");
+          }
         }
       },
     };
@@ -749,6 +954,210 @@
     log("Attached Little Zen empty-tab state tracking");
   }
 
+  function ensureLittleWindowLoadingPulse(win) {
+    if (!isBrowserWindow(win)) {
+      return null;
+    }
+
+    const doc = win.document;
+    if (!doc.body) {
+      return null;
+    }
+
+    let overlay = doc.getElementById("zen-little-window-loading-overlay");
+    if (overlay) {
+      return overlay;
+    }
+
+    overlay = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
+    overlay.id = "zen-little-window-loading-overlay";
+    overlay.setAttribute("aria-hidden", "true");
+
+    const pulse = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
+    pulse.id = "zen-little-window-loading-pulse";
+    overlay.appendChild(pulse);
+
+    const fallback = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
+    fallback.id = "zen-little-window-load-fallback";
+
+    const fallbackTitle = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
+    fallbackTitle.id = "zen-little-window-load-fallback-title";
+    fallbackTitle.textContent = "Still loading";
+    fallback.appendChild(fallbackTitle);
+
+    const fallbackActions = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
+    fallbackActions.id = "zen-little-window-load-fallback-actions";
+
+    const makeButton = (id, label, action) => {
+      const button = doc.createElementNS("http://www.w3.org/1999/xhtml", "button");
+      button.id = id;
+      button.type = "button";
+      button.textContent = label;
+      button.addEventListener("click", event => {
+        event.preventDefault();
+        event.stopPropagation();
+        action();
+      });
+      fallbackActions.appendChild(button);
+      return button;
+    };
+
+    makeButton("zen-little-window-load-retry", "Retry", () => {
+      retryLittleWindowStalledLoad(win);
+    });
+    makeButton("zen-little-window-load-main", "Open in Main", () => {
+      openLittleWindowStalledLoadInMain(win);
+    });
+    makeButton("zen-little-window-load-close", "Close", () => {
+      win.close();
+    });
+
+    fallback.appendChild(fallbackActions);
+    overlay.appendChild(fallback);
+
+    (doc.body || doc.documentElement).appendChild(overlay);
+    return overlay;
+  }
+
+  function clearLittleWindowLoadingFallback(win) {
+    try {
+      if (win.__littleZenStalledLoadTimer) {
+        win.clearTimeout(win.__littleZenStalledLoadTimer);
+      }
+    } catch (error) {}
+    delete win.__littleZenStalledLoadTimer;
+
+    try {
+      win.document.documentElement.removeAttribute("zen-little-window-load-stalled");
+      win.document
+        .getElementById("zen-little-window-loading-overlay")
+        ?.setAttribute("aria-hidden", "true");
+    } catch (error) {}
+  }
+
+  function showLittleWindowStalledLoadFallback(win, reason = "unknown") {
+    if (!isLittleWindow(win) || win.closed) {
+      return;
+    }
+
+    const root = win.document.documentElement;
+    if (!root.hasAttribute("zen-little-window-loading")) {
+      return;
+    }
+
+    ensureLittleWindowLoadingPulse(win);
+    root.setAttribute("zen-little-window-load-stalled", "true");
+    win.document
+      .getElementById("zen-little-window-loading-overlay")
+      ?.removeAttribute("aria-hidden");
+    logLittleWindowState(win, "Little Zen stalled-load fallback shown", {
+      reason,
+      timeoutMs: LITTLE_ZEN_STALLED_LOAD_TIMEOUT_MS,
+    });
+  }
+
+  function scheduleLittleWindowLoadingFallback(win, reason = "unknown") {
+    clearLittleWindowLoadingFallback(win);
+    if (!isLittleWindow(win)) {
+      return;
+    }
+
+    win.__littleZenStalledLoadTimer = win.setTimeout(() => {
+      delete win.__littleZenStalledLoadTimer;
+      showLittleWindowStalledLoadFallback(win, reason);
+    }, LITTLE_ZEN_STALLED_LOAD_TIMEOUT_MS);
+  }
+
+  function getLittleWindowFallbackUrl(win) {
+    return (
+      win?.__littleZenPendingURL ||
+      win?.__littleZenRoutedURL ||
+      getLittleWindowUrl(win)
+    );
+  }
+
+  function retryLittleWindowStalledLoad(win) {
+    if (!isLittleWindow(win) || win.closed) {
+      return;
+    }
+
+    const url = getLittleWindowFallbackUrl(win);
+    clearLittleWindowLoadingFallback(win);
+    setLittleWindowLoading(win, true, "stalled-retry");
+
+    if (win.__littleZenPendingURL) {
+      schedulePendingNavigationFlush(win, "stalled-retry");
+      return;
+    }
+
+    try {
+      if (url && url !== "about:blank") {
+        win.gBrowser?.selectedBrowser?.reload?.();
+      }
+    } catch (error) {
+      log("Could not retry stalled Little Zen load", error);
+    }
+  }
+
+  function openLittleWindowStalledLoadInMain(win) {
+    const url = getLittleWindowFallbackUrl(win);
+    const mainWin = getMainBrowserWindow(win);
+    if (!url || url === "about:blank" || !mainWin) {
+      win.close();
+      return;
+    }
+
+    try {
+      const principal = Services.scriptSecurityManager.getSystemPrincipal();
+      if (typeof mainWin.openWebLinkIn === "function") {
+        mainWin.openWebLinkIn(url, "tab", {
+          triggeringPrincipal: principal,
+          fromChrome: true,
+        });
+      } else {
+        const tab = mainWin.gBrowser.addTab(url, {
+          triggeringPrincipal: principal,
+          skipAnimation: true,
+        });
+        if (tab) {
+          mainWin.gBrowser.selectedTab = tab;
+        }
+      }
+      mainWin.focus();
+    } catch (error) {
+      log("Could not open stalled Little Zen load in the main window", error);
+    }
+
+    win.close();
+  }
+
+  function setLittleWindowLoading(win, isLoading, reason = "unknown") {
+    if (!isLittleWindow(win)) {
+      return;
+    }
+
+    const root = win.document.documentElement;
+    if (isLoading) {
+      root.setAttribute("zen-little-window-loading", "true");
+      ensureLittleWindowLoadingPulse(win);
+      scheduleLittleWindowLoadingFallback(win, reason);
+    } else {
+      root.removeAttribute("zen-little-window-loading");
+      clearLittleWindowLoadingFallback(win);
+      delete win.__littleZenStartLoadingVeil;
+      delete win.__littleZenSuppressUrlbarFocus;
+      if (win.__littleZenReleasePresentationAfterLoading) {
+        const releaseReason = win.__littleZenReleasePresentationAfterLoading;
+        delete win.__littleZenReleasePresentationAfterLoading;
+        releaseLittleWindowPresentation(win, `loading-complete:${releaseReason}`);
+      }
+    }
+
+    logLittleWindowState(win, isLoading ? "Entered Little Zen loading veil" : "Left Little Zen loading veil", {
+      reason,
+    });
+  }
+
   function refreshLittleWindowLayout(win) {
     const root = win.document.documentElement;
     root.setAttribute(LITTLE_WINDOW_ATTR, "true");
@@ -767,43 +1176,17 @@
     }
   }
 
+  function verifyLittleWindowUrlbarPosition(win, reason = "unknown") {
+    closeLittleWindowUrlbar(win, `urlbar-position-disabled:${reason}`);
+  }
+
+  function scheduleLittleWindowUrlbarPositionCheck(win, reason = "unknown") {
+    closeLittleWindowUrlbar(win, `urlbar-position-check-disabled:${reason}`);
+  }
+
   function openLittleWindowUrlbar(win) {
-    if (!isEmptyLittleWindow(win)) {
-      return false;
-    }
-
-    logLittleWindowState(win, "Opening Little Zen urlbar");
-
-    try {
-      const handled = win.gZenUIManager?.handleNewTab?.(false, false, "tab", true);
-      if (handled) {
-        logLittleWindowState(
-          win,
-          "Opened Little Zen urlbar via gZenUIManager.handleNewTab"
-        );
-        return true;
-      }
-    } catch (error) {
-      log("Little Zen gZenUIManager.handleNewTab failed.", error);
-    }
-
-    try {
-      const urlbar = win.gURLBar;
-      urlbar?.search?.("");
-      urlbar?.setAttribute("zen-newtab", "true");
-      win.document.getElementById("Browser:OpenLocation")?.doCommand();
-      urlbar?.focus();
-      urlbar?.select();
-      urlbar?.inputField?.focus();
-      logLittleWindowState(
-        win,
-        "Opened Little Zen urlbar via Browser:OpenLocation fallback"
-      );
-      return true;
-    } catch (error) {
-      log("Could not open the Little Zen urlbar.", error);
-    }
-
+    closeLittleWindowUrlbar(win, "open-urlbar-disabled");
+    logLittleWindowState(win, "Blocked Little Zen urlbar open");
     return false;
   }
 
@@ -858,11 +1241,12 @@
 
     const pendingMeta = win.__littleZenPendingURLMeta ?? {};
     win.__littleZenSuppressUrlbarFocus = true;
+    setLittleWindowLoading(win, true, `flush:${reason}`);
     closeLittleWindowUrlbar(win, `flush:${reason}`);
     delete win.__littleZenPendingURL;
     delete win.__littleZenPendingURLMeta;
 
-    log("Loading queued Little Zen URL", {
+    routeLog("Loading queued Little Zen URL", {
       url: pendingUrl,
       source: pendingMeta.source ?? "unknown",
       reason,
@@ -889,7 +1273,7 @@
       const selectedTab = win.gBrowser?.selectedTab;
       const currentContainerId = getTabContainerId(selectedTab);
 
-      log("Little Zen routing target: preparing tab container before load", {
+      routeLog("Little Zen routing target: preparing tab container before load", {
         url: pendingUrl,
         reason,
         targetWorkspaceId: targetWorkspace?.uuid ?? null,
@@ -938,7 +1322,7 @@
               log("Could not remove old Little Zen container placeholder tab", error);
             }
           }, 1000);
-          log("Little Zen routing target: opened routed URL in target container tab", {
+          routeLog("Little Zen routing target: opened routed URL in target container tab", {
             targetContainerId,
             targetWorkspaceId: targetWorkspace?.uuid ?? null,
           });
@@ -949,6 +1333,7 @@
           });
           win.__littleZenPendingURL = pendingUrl;
           win.__littleZenPendingURLMeta = pendingMeta;
+          setLittleWindowLoading(win, true, `retry:${reason}`);
           return false;
         }
       } else if (selectedTab && targetWorkspace?.uuid) {
@@ -998,6 +1383,7 @@
       log("Failed to load queued Little Zen URL", pendingUrl, error);
       win.__littleZenPendingURL = pendingUrl;
       win.__littleZenPendingURLMeta = pendingMeta;
+      setLittleWindowLoading(win, true, `error:${reason}`);
       return false;
     }
   }
@@ -1032,48 +1418,8 @@
   }
 
   function focusUrlbar(win) {
-    if (win.__littleZenSuppressUrlbarFocus) {
-      logLittleWindowState(win, "Skipping Little Zen urlbar focus while navigation is loading");
-      return;
-    }
-
-    if (!isEmptyLittleWindow(win)) {
-      return;
-    }
-
-    win.requestAnimationFrame(() => {
-      win.requestAnimationFrame(() => {
-        const urlbar = win.gURLBar;
-        if (!urlbar || !isEmptyLittleWindow(win) || win.__littleZenSuppressUrlbarFocus) {
-          return;
-        }
-
-        if (urlbar.hasAttribute("breakout-extend") || urlbar.view?.isOpen) {
-          try {
-            urlbar.focus();
-            urlbar.select();
-            urlbar.inputField?.focus();
-            logLittleWindowState(win, "Focused existing Little Zen urlbar breakout");
-          } catch (error) {
-            log("Could not focus the little window urlbar.", error);
-          }
-          return;
-        }
-
-        if (openLittleWindowUrlbar(win)) {
-          return;
-        }
-
-        try {
-          urlbar.focus();
-          urlbar.select();
-          urlbar.inputField?.focus();
-          logLittleWindowState(win, "Focused Little Zen urlbar without breakout");
-        } catch (error) {
-          log("Could not focus the little window urlbar.", error);
-        }
-      });
-    });
+    closeLittleWindowUrlbar(win, "focus-urlbar-disabled");
+    logLittleWindowState(win, "Blocked Little Zen urlbar focus");
   }
 
   // ── Workspace Picker ────────────────────────────────────────────────────────
@@ -2214,7 +2560,7 @@
     };
 
     if (!url) {
-      log("Little Zen routing target: no URL, using active workspace", routeDebugBase);
+      routeLog("Little Zen routing target: no URL, using active workspace", routeDebugBase);
       return activeWorkspaceId;
     }
 
@@ -2225,7 +2571,7 @@
       });
       const defaultExternalRoute =
         routingManager?.getDefaultExternalRoute?.() ?? null;
-      log("Little Zen routing target: routeUri result", {
+      routeLog("Little Zen routing target: routeUri result", {
         ...routeDebugBase,
         route,
         defaultExternalRoute,
@@ -2233,14 +2579,14 @@
       if (route && route !== "most-recent-space") {
         const workspace = getWorkspaceByRouteTarget(mainWin, route);
         if (workspace) {
-          log("Little Zen routing target: resolved routed workspace", {
+          routeLog("Little Zen routing target: resolved routed workspace", {
             route,
             workspaceId: workspace.uuid,
             workspaceName: workspace.name,
           });
           return workspace.uuid;
         }
-        log("Little Zen routing target: route did not match a workspace", {
+        routeLog("Little Zen routing target: route did not match a workspace", {
           route,
           ...routeDebugBase,
         });
@@ -2252,14 +2598,14 @@
       });
     }
 
-    log("Little Zen routing target: using active workspace fallback", routeDebugBase);
+    routeLog("Little Zen routing target: using active workspace fallback", routeDebugBase);
     return activeWorkspaceId;
   }
 
   function resolveLittleZenTargetWorkspace(win, mainWin, reason = "unknown") {
     const workspaceId = getInitialTargetWorkspaceId(win, mainWin);
     const workspace = getWorkspaceById(mainWin, workspaceId);
-    log("Little Zen routing target: final workspace decision", {
+    routeLog("Little Zen routing target: final workspace decision", {
       reason,
       workspaceId,
       workspaceName: workspace?.name ?? null,
@@ -2330,7 +2676,7 @@
         ? getWorkspaceContainerId(routeWorkspace)
         : Number.parseInt(userContextId, 10) || 0;
 
-    log("Little Zen routing target: Zen routing decision", {
+    routeLog("Little Zen routing target: Zen routing decision", {
       reason,
       url,
       beforeRouteResult,
@@ -2844,6 +3190,48 @@
 
   // ── End Workspace Picker ─────────────────────────────────────────────────────
 
+  function attachDoubleEscapeClose(win) {
+    if (win[PATCH_FLAGS.doubleEscapeClose]) {
+      return;
+    }
+
+    let lastEscapeAt = 0;
+    const onKeyDown = event => {
+      if (!isLittleWindow(win) || event.defaultPrevented || event.key !== "Escape") {
+        return;
+      }
+
+      const now = win.performance?.now?.() ?? Date.now();
+      if (now - lastEscapeAt <= 520) {
+        event.preventDefault();
+        event.stopPropagation();
+        logLittleWindowState(win, "Closing Little Zen window after double Escape");
+        win.close();
+        return;
+      }
+
+      lastEscapeAt = now;
+      win.setTimeout(() => {
+        if ((win.performance?.now?.() ?? Date.now()) - lastEscapeAt >= 520) {
+          lastEscapeAt = 0;
+        }
+      }, 560);
+    };
+
+    win.addEventListener("keydown", onKeyDown, true);
+    win.addEventListener(
+      "unload",
+      () => {
+        try {
+          win.removeEventListener("keydown", onKeyDown, true);
+        } catch (error) {}
+      },
+      { once: true }
+    );
+    win[PATCH_FLAGS.doubleEscapeClose] = true;
+    log("Attached Little Zen double Escape close listener");
+  }
+
   function attachAutoClose(win) {
     if (win[PATCH_FLAGS.autoClose]) {
       return;
@@ -2855,16 +3243,15 @@
     const onOpened = () => {
       releaseLittleWindowPresentation(win, "floating-urlbar-opened");
       centerWindow(win);
+      closeLittleWindowUrlbar(win, "floating-urlbar-opened-disabled");
 
       try {
         win.focus();
-        urlbar?.focus();
-        urlbar?.inputField?.focus();
       } catch (error) {
-        log("Could not focus the opened Little Zen urlbar.", error);
+        log("Could not focus the Little Zen window.", error);
       }
 
-      logLittleWindowState(win, "Little Zen floating urlbar opened");
+      logLittleWindowState(win, "Blocked Little Zen floating urlbar open");
     };
 
     const onUnload = () => {
@@ -2881,6 +3268,7 @@
         resizeObserver?.disconnect();
       } catch (error) {}
       resizeObserver = null;
+      clearLittleWindowLoadingFallback(win);
       try {
         win.removeEventListener("ZenFloatingURLBarOpened", onOpened);
         win.removeEventListener("ZenURLBarClosed", onClosed);
@@ -2947,6 +3335,7 @@
     try {
       win.resizeTo(URLBAR_WIDTH, URLBAR_HEIGHT);
       win.focus();
+      closeLittleWindowUrlbar(win, "attach-auto-close-disabled");
     } catch (error) {
       log("Could not size the little window.", error);
     }
@@ -2971,10 +3360,16 @@
     patchVerticalTabsManager(win);
     patchZenUIManager(win);
     patchUrlbar(win);
+    attachUrlbarDisableGuard(win);
     attachEmptyTabStateTracking(win);
     attachTransparentBrowserPrefSync(win);
     attachLittleWindowCloseButtonGuard(win);
+    attachDoubleEscapeClose(win);
     syncLittleWindowTransparentBrowsers(win);
+    ensureLittleWindowLoadingPulse(win);
+    if (win.__littleZenStartLoadingVeil || win.__littleZenPendingURL) {
+      setLittleWindowLoading(win, true, "apply-mode-startup");
+    }
     syncEmptyTabState(win, "apply-mode");
     updateLittleZenBlendedTheme(win, "apply-mode");
     refreshLittleWindowLayout(win);
@@ -2982,7 +3377,7 @@
     if (win.__littleZenPendingURL) {
       schedulePendingNavigationFlush(win, "apply-mode");
     } else if (!win.__littleZenSuppressUrlbarFocus) {
-      focusUrlbar(win);
+      closeLittleWindowUrlbar(win, "apply-mode-urlbar-disabled");
     }
     ensureSpacePicker(win);
     logLittleWindowState(win, "Applied Little Zen mode");
@@ -3079,11 +3474,12 @@
       }
 
       win.__littleZenSuppressUrlbarFocus = true;
+      setLittleWindowLoading(win, true, "queue-navigation");
       closeLittleWindowUrlbar(win, "queue-navigation");
       win.__littleZenPendingURL = url;
       win.__littleZenRoutedURL = url;
       win.__littleZenPendingURLMeta = meta;
-      log("Queued Little Zen navigation", {
+      routeLog("Queued Little Zen navigation", {
         url,
         source: meta.source ?? "unknown",
       });
@@ -3145,6 +3541,7 @@
         zenLittleWindow: true,
         all: false,
         features: OPEN_FEATURES,
+        url,
       });
 
       if (littleWindow) {
