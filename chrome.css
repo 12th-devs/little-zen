@@ -258,9 +258,10 @@
 :root[zen-little-window="true"] #zen-sidebar-icons,
 :root[zen-little-window="true"] #zen-sidebar-wrapper,
 :root[zen-little-window="true"] #zen-sidebar-web-panel-wrapper,
-:root[zen-little-window="true"][zen-compact-mode="true"] #zen-appcontent-navbar-wrapper,
+:root[zen-little-window="true"] #zen-appcontent-navbar-wrapper,
 :root[zen-little-window="true"] #PanelUI-menu-button {
   visibility: collapse !important;
+  display: none !important;
   min-width: 0 !important;
   width: 0 !important;
   max-width: 0 !important;
@@ -395,6 +396,7 @@
 }
 
 :root[zen-little-window="true"] #zen-tabbox-wrapper {
+  position: relative !important;
   margin: 0 !important;
   box-sizing: border-box !important;
   border-radius: var(--blended-addressbar-frame-radius) !important;
@@ -402,8 +404,21 @@
     0 16px 48px color-mix(in srgb, var(--little-zen-page-outline, currentColor) 78%, transparent),
     0 4px 14px color-mix(in srgb, var(--little-zen-page-outline, currentColor) 62%, transparent),
     0 0 0 1px color-mix(in srgb, var(--little-zen-page-outline, currentColor) 48%, transparent) !important;
+  clip-path: inset(0 round var(--blended-addressbar-frame-radius)) !important;
   overflow: hidden !important;
   transition: box-shadow var(--blended-addressbar-color-transition);
+}
+
+:root[zen-little-window="true"] #zen-tabbox-wrapper::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2147483646;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--little-zen-page-outline, currentColor) 40%, transparent),
+    inset 0 0 0 2px color-mix(in srgb, var(--little-zen-window-theme-background, Canvas) 42%, transparent);
 }
 
 :root[zen-little-window="true"] #tabbrowser-tabpanels > .browserSidebarContainer:not(.zen-glance-overlay) {
