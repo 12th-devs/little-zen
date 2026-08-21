@@ -469,6 +469,7 @@
             LITTLE_WINDOW_ATTR,
             "true"
           );
+          suppressLittleWindowCompactChrome(littleWindow, "open-browser-window");
           if (littleWindow.__littleZenStartLoadingVeil) {
             littleWindow.document?.documentElement?.setAttribute(
               "zen-little-window-loading",
@@ -509,6 +510,83 @@
     });
 
     manager[PATCH_FLAGS.compactMode] = true;
+  }
+
+  function suppressLittleWindowCompactChrome(win, reason = "unknown") {
+    if (!isBrowserWindow(win)) {
+      return;
+    }
+
+    const root = win.document?.documentElement;
+    if (!root?.hasAttribute(LITTLE_WINDOW_ATTR) && !win._zenStartupLittleWindow) {
+      return;
+    }
+
+    for (const attribute of [
+      "zen-compact-mode",
+      "zen-sidebar-expanded",
+      "zen-user-show",
+      "zen-has-hover",
+    ]) {
+      try {
+        root.removeAttribute(attribute);
+      } catch (error) {}
+    }
+
+    try {
+      win.document
+        .getElementById("zen-appcontent-navbar-wrapper")
+        ?.removeAttribute("zen-user-show");
+      win.document
+        .getElementById("zen-appcontent-navbar-wrapper")
+        ?.removeAttribute("zen-has-hover");
+    } catch (error) {}
+
+    try {
+      win.gZenCompactModeManager?._updateEvent?.();
+    } catch (error) {
+      log("Could not refresh compact mode after Little Zen suppression", error);
+    }
+
+    routeLog("Suppressed Little Zen compact chrome", { reason });
+  }
+
+  function attachLittleWindowCompactChromeGuard(win) {
+    if (win.__littleZenCompactChromeGuardAttached || !isBrowserWindow(win)) {
+      return;
+    }
+
+    const root = win.document?.documentElement;
+    if (!root) {
+      return;
+    }
+
+    const observer = new win.MutationObserver(() => {
+      suppressLittleWindowCompactChrome(win, "attribute-observer");
+    });
+
+    observer.observe(root, {
+      attributes: true,
+      attributeFilter: [
+        "zen-compact-mode",
+        "zen-sidebar-expanded",
+        "zen-user-show",
+        "zen-has-hover",
+        LITTLE_WINDOW_ATTR,
+      ],
+    });
+
+    win.addEventListener(
+      "unload",
+      () => {
+        try {
+          observer.disconnect();
+        } catch (error) {}
+      },
+      { once: true }
+    );
+
+    win.__littleZenCompactChromeGuardAttached = true;
   }
 
   function patchVerticalTabsManager(win) {
@@ -1161,6 +1239,7 @@
   function refreshLittleWindowLayout(win) {
     const root = win.document.documentElement;
     root.setAttribute(LITTLE_WINDOW_ATTR, "true");
+    suppressLittleWindowCompactChrome(win, "refresh-layout");
     root.toggleAttribute("zen-no-padding", isEmptyLittleWindow(win));
 
     try {
@@ -3328,6 +3407,7 @@
     }
 
     win.document.documentElement.setAttribute(LITTLE_WINDOW_ATTR, "true");
+    suppressLittleWindowCompactChrome(win, "attach-auto-close");
     win.document.documentElement.toggleAttribute("zen-no-padding", isEmptyLittleWindow(win));
     win.__littleZenLifecycleCleanup = cleanup;
 
@@ -3356,6 +3436,8 @@
     }
 
     win.document.documentElement.setAttribute(LITTLE_WINDOW_ATTR, "true");
+    suppressLittleWindowCompactChrome(win, "apply-mode-start");
+    attachLittleWindowCompactChromeGuard(win);
     patchCompactModeManager(win);
     patchVerticalTabsManager(win);
     patchZenUIManager(win);
@@ -3476,6 +3558,7 @@
       win._zenStartupLittleWindow = true;
       try {
         win.document?.documentElement?.setAttribute(LITTLE_WINDOW_ATTR, "true");
+        suppressLittleWindowCompactChrome(win, "queue-navigation");
         win.document?.documentElement?.setAttribute(
           "zen-little-window-loading",
           "true"

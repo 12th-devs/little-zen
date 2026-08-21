@@ -3,6 +3,9 @@
 :root[zen-little-window="true"] {
   --zen-element-separation: 0.1px !important;
   --little-zen-titlebar-control-width: 138px;
+  --zen-sidebar-width: 0px !important;
+  --zen-compact-sidebar-width: 0px !important;
+  --zen-compact-mode-sidebar-width: 0px !important;
   --blended-addressbar-frame-gap: 5px;
   --blended-addressbar-frame-radius: 8px;
   --blended-addressbar-inner-radius: max(
@@ -246,8 +249,21 @@
 
 :root[zen-little-window="true"] #navigator-toolbox,
 :root[zen-little-window="true"] #zen-sidebar-splitter,
+:root[zen-little-window="true"] #sidebar-splitter,
+:root[zen-little-window="true"] #sidebar-box,
+:root[zen-little-window="true"] #TabsToolbar,
+:root[zen-little-window="true"] #zen-sidebar-top-buttons,
+:root[zen-little-window="true"] #zen-sidebar-bottom-buttons,
+:root[zen-little-window="true"] #zen-sidebar-icons-wrapper,
+:root[zen-little-window="true"] #zen-sidebar-icons,
+:root[zen-little-window="true"] #zen-sidebar-wrapper,
+:root[zen-little-window="true"] #zen-sidebar-web-panel-wrapper,
 :root[zen-little-window="true"] #PanelUI-menu-button {
   visibility: collapse !important;
+  display: none !important;
+  min-width: 0 !important;
+  width: 0 !important;
+  max-width: 0 !important;
 }
 
 :root[zen-little-window="true"] .titlebar-buttonbox-container,
@@ -374,7 +390,9 @@
 
 :root[zen-little-window="true"] #tabbrowser-tabbox,
 :root[zen-little-window="true"] #tabbrowser-tabpanels {
-  overflow: hidden;
+  border-radius: var(--blended-addressbar-frame-radius) !important;
+  clip-path: inset(0 round var(--blended-addressbar-frame-radius)) !important;
+  overflow: hidden !important;
 }
 
 :root[zen-little-window="true"] #zen-tabbox-wrapper {
@@ -385,6 +403,7 @@
     0 16px 48px color-mix(in srgb, var(--little-zen-page-outline, currentColor) 78%, transparent),
     0 4px 14px color-mix(in srgb, var(--little-zen-page-outline, currentColor) 62%, transparent),
     0 0 0 1px color-mix(in srgb, var(--little-zen-page-outline, currentColor) 48%, transparent) !important;
+  clip-path: inset(0 round var(--blended-addressbar-frame-radius)) !important;
   overflow: hidden !important;
   transition: box-shadow var(--blended-addressbar-color-transition);
 }
@@ -392,7 +411,23 @@
 :root[zen-little-window="true"] #tabbrowser-tabpanels > .browserSidebarContainer:not(.zen-glance-overlay) {
   --zen-native-inner-radius: var(--blended-addressbar-frame-radius) !important;
   --zen-big-shadow: none;
+  border-radius: var(--blended-addressbar-frame-radius) !important;
   box-shadow: none !important;
+  clip-path: inset(0 round var(--blended-addressbar-frame-radius)) !important;
+  contain: paint !important;
+  overflow: hidden !important;
+}
+
+:root[zen-little-window="true"] #tabbrowser-tabpanels > .browserSidebarContainer:not(.zen-glance-overlay) :is(
+  .browserStack,
+  .browserContainer,
+  browser[type="content"],
+  browser[primary="true"]
+) {
+  border-radius: inherit !important;
+  clip-path: inset(0 round var(--blended-addressbar-frame-radius)) !important;
+  background-clip: padding-box !important;
+  overflow: hidden !important;
 }
 
 :root[zen-little-window="true"] .titlebar-button.titlebar-close {
