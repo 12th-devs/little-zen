@@ -348,6 +348,17 @@
   padding-inline-start: 16px !important;
 }
 
+/* macOS already positions native traffic lights at the window edge. */
+@media (-moz-platform: macos) {
+  :root[zen-little-window="true"][zen-window-buttons-reversed="true"] .titlebar-buttonbox-container {
+    padding-inline-start: 0 !important;
+  }
+
+  :root[zen-little-window="true"][zen-window-buttons-reversed="true"] .titlebar-buttonbox {
+    margin-inline-start: 0 !important;
+  }
+}
+
 /* Same breathing room for the far-left page controls when the window
    controls sit on the right. */
 :root[zen-little-window="true"]:not([zen-window-buttons-reversed="true"]) #nav-bar {
